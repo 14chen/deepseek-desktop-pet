@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1420" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#eef2f9" media="(prefers-color-scheme: light)">
+<meta name="description" content="DeepSeek Harness 桌宠 - 任务提醒、额度监控、专注计时">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="桌宠">
+<title>DeepSeek 桌宠</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/pet.png" type="image/png">
+<link rel="apple-touch-icon" href="assets/pet.png">
+<link rel="stylesheet" href="pet.css">
+</head>
+<body>
+<div class="aurora" aria-hidden="true"></div>
+
+<div class="app" id="app">
+
+  <header class="topbar">
+    <div class="identity">
+      <div class="avatar" id="avatar" role="button" tabindex="0" aria-label="摸摸桌宠">
+        <img id="avatarImg" src="assets/pet.png" alt="桌宠">
+        <span class="mood-dot" id="moodDot" title="状态"></span>
+      </div>
+      <div class="who">
+        <h1 id="petName">Deep</h1>
+        <p class="sub" id="petSub">正在连接…</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span class="pill" id="levelPill" title="等级">Lv.1</span>
+      <button class="icon-btn" id="soundBtn" title="提示音开关" aria-pressed="false">🔔</button>
+      <button class="icon-btn" id="refreshBtn" title="刷新">⟳</button>
+    </div>
+  </header>
+
+  <!-- Speech bubble + pet stage -->
+  <section class="stage-card" aria-live="polite">
+    <div class="bubble" id="bubble" hidden>
+      <strong class="bubble-title" id="bubbleTitle"></strong>
+      <span class="bubble-text" id="bubbleText"></span>
+      <div class="bubble-actions" id="bubbleActions"></div>
+    </div>
+    <div class="stage" id="stage">
+      <div class="glow" id="glow"></div>
+      <img class="pet" id="petImg" src="assets/pet.png" alt="桌宠形象" draggable="false">
+      <div class="shadow"></div>
+    </div>
+    <div class="xp-bar" title="经验值">
+      <div class="xp-fill" id="xpFill"></div>
+      <span class="xp-label" id="xpLabel">0 / 40 XP</span>
+    </div>
+    <p class="hint" id="hint">摸摸它试试 👆</p>
+  </section>
+
+  <div class="grid">
+
+    <!-- Quota -->
+    <section class="card quota-card" id="quotaCard">
+      <div class="card-head">
+        <h2>DeepSeek 额度</h2>
+        <span class="badge" id="quotaBadge">未知</span>
+      </div>
+      <div class="quota-body">
+        <div class="ring-wrap">
+          <svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+            <circle class="ring-track" cx="60" cy="60" r="52"></circle>
+            <circle class="ring-value" id="ringValue" cx="60" cy="60" r="52"
+                    stroke-dasharray="326.7" stroke-dashoffset="326.7"></circle>
+          </svg>
+          <div class="ring-center">
+            <span class="ring-percent" id="ringPercent">--</span>
+            <span class="ring-caption">剩余</span>
+          </div>
+        </div>
+        <div class="quota-facts">
+          <div class="fact">
+            <span class="fact-label">总余额</span>
+            <strong class="fact-value" id="balanceTotal">--</strong>
+          </div>
+          <div class="fact">
+            <span class="fact-label">赠送额度</span>
+            <strong class="fact-value" id="balanceGranted">--</strong>
+          </div>
+          <div class="fact">
+            <span class="fact-label">充值余额</span>
+            <strong class="fact-value" id="balanceTopped">--</strong>
+          </div>
+          <div class="fact">
+            <span class="fact-label">更新于</span>
+            <strong class="fact-value" id="balanceUpdated">--</strong>
+          </div>
+        </div>
+      </div>
+      <div class="spark-wrap" id="sparkWrap" hidden>
+        <svg class="spark" id="spark" viewBox="0 0 300 48" preserveAspectRatio="none" aria-hidden="true">
+          <polyline class="spark-area" id="sparkArea" points=""></polyline>
+          <polyline class="spark-line" id="sparkLine" points=""></polyline>
+        </svg>
+        <span class="spark-caption" id="sparkCaption"></span>
+      </div>
+      <p class="card-foot" id="quotaError" hidden></p>
+    </section>
+
+    <!-- Stats -->
+    <section class="card">
+      <div class="card-head"><h2>今日</h2><span class="badge" id="streakBadge">连续 0 天</span></div>
+      <div class="stat-grid">
+        <div class="stat"><span class="stat-value" id="statTasks">0</span><span class="stat-label">完成任务</span></div>
+        <div class="stat"><span class="stat-value" id="statFocus">0</span><span class="stat-label">专注分钟</span></div>
+        <div class="stat"><span class="stat-value" id="statPomodoros">0</span><span class="stat-label">番茄轮数</span></div>
+        <div class="stat"><span class="stat-value" id="statAffection">0</span><span class="stat-label">亲密度</span></div>
+      </div>
+      <ul class="timeline" id="timeline"></ul>
+    </section>
+
+    <!-- Pomodoro -->
+    <section class="card">
+      <div class="card-head">
+        <h2>专注计时</h2>
+        <span class="badge" id="pomoBadge">空闲</span>
+      </div>
+      <div class="pomo">
+        <div class="pomo-time" id="pomoTime">25:00</div>
+        <div class="pomo-controls">
+          <button class="btn primary" id="pomoStart">开始专注</button>
+          <button class="btn" id="pomoBreak">休息 5 分</button>
+          <button class="btn ghost" id="pomoStop">停止</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Todos -->
+    <section class="card">
+      <div class="card-head"><h2>清单</h2><span class="badge" id="todoBadge">0 项</span></div>
+      <form class="todo-form" id="todoForm">
+        <input type="text" id="todoInput" placeholder="加一条待办，回车保存" maxlength="120"
+               autocomplete="off" enterkeyhint="done">
+        <button class="btn primary" type="submit" aria-label="添加">+</button>
+      </form>
+      <ul class="todos" id="todoList"></ul>
+    </section>
+
+  </div>
+
+  <footer class="foot">
+    <span id="bridgeInfo">—</span>
+    <a id="dsLink" href="#" target="_blank" rel="noopener">打开 DeepSeek Harness</a>
+  </footer>
+</div>
+
+<div class="toast-stack" id="toastStack" aria-live="polite"></div>
+
+<script type="module" src="pet.js"></script>
+</body>
+</html>

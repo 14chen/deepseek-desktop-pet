@@ -1,0 +1,53 @@
+# The dsh-desktop-pet bundle patch.
+#
+# It inserts exactly one row. Everything else the plugin needs it resolves for
+# itself: `timer` is declared in the module's `inject` because that row ships in
+# every profile, and the optional halves (tools, commands, webServer,
+# deepseekAccount) are attached through `ctx.inject([...])` inside the plugin,
+# so the pet degrades gracefully instead of refusing to load.
+#
+# Every field below is a default. Edit them here, or override them from the
+# profile's own `cordis.patch.yml`, which is applied after every bundle layer:
+#
+#   - id: desktop-pet
+#     config:
+#       quotaPollSeconds: 300
+
+- insert:
+    - id: desktop-pet
+      name: 'dsh-desktop-pet'
+      config:
+        # --- notifications -------------------------------------------------
+        notifyOnTaskDone: true
+        notifyOnUserAction: true
+        sound: false
+        mute: false
+        chatter: true
+
+        # --- quota monitoring ----------------------------------------------
+        # The platform API is uncached and unmetered but real; 120s is polite.
+        quotaPollSeconds: 120
+        quotaWarnRatio: 0.25
+        quotaCriticalRatio: 0.1
+        # 0 means "remember the highest balance ever seen" as the 100% mark.
+        quotaBaseline: 0
+
+        # --- floating window -----------------------------------------------
+        autoStartDesktop: true
+        alwaysOnTop: true
+        desktopScale: 1
+
+        # --- web page ------------------------------------------------------
+        # `host` and `port` belong to the shared DSH webserver; the pet page
+        # rides the same listener at /pet so phones reach it with the same URL.
+        lanAccess: false
+        webPort: 0
+
+        # --- wellbeing -----------------------------------------------------
+        hydrateReminderMinutes: 0
+        stretchReminderMinutes: 0
+
+        # --- pomodoro ------------------------------------------------------
+        pomodoroFocusMinutes: 25
+        pomodoroBreakMinutes: 5
+        pomodoroAutoBreak: true

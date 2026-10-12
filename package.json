@@ -1,0 +1,64 @@
+{
+  "name": "dsh-desktop-pet",
+  "version": "1.0.0",
+  "description": "Desktop pet for DeepSeek Harness: task-completion reminders, mid-task prompts, DeepSeek platform quota monitoring, an interactive always-on-top desktop mascot, and a responsive multi-device pet page.",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "desktop-pet",
+    "plugin",
+    "cordis",
+    "mascot",
+    "quota"
+  ],
+  "type": "module",
+  "license": "MIT",
+  "author": "14chen",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/14chen/deepseek-desktop-pet.git"
+  },
+  "homepage": "https://github.com/14chen/deepseek-desktop-pet#readme",
+  "bugs": {
+    "url": "https://github.com/14chen/deepseek-desktop-pet/issues"
+  },
+  "main": "src/host/index.js",
+  "exports": {
+    ".": "./src/host/index.js",
+    "./client": "./src/client/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./web/*": "./web/*",
+    "./desktop/*": "./desktop/*",
+    "./shared/*": "./src/shared/*"
+  },
+  "files": [
+    "src",
+    "web",
+    "desktop",
+    "assets",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build:assets": "node tools/build-assets.mjs",
+    "test": "node test/run-all.mjs",
+    "test:unit": "node test/unit/core.test.mjs",
+    "test:host": "node test/e2e/host.e2e.mjs",
+    "test:desktop": "node test/e2e/desktop.e2e.mjs",
+    "start:desktop": "node bin/pet.mjs start",
+    "stop:desktop": "node bin/pet.mjs stop",
+    "capture": "node bin/pet.mjs capture",
+    "doctor": "node bin/pet.mjs doctor"
+  }
+}
