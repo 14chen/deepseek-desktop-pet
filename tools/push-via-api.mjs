@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Push the current commit to GitHub over the REST API.
  *
  * `github.com:443` is intermittently unreachable from this network while
@@ -97,15 +97,34 @@ async function api(method, route, body) {
 }
 
 const head = git('rev-parse', 'HEAD');
-const commit = rawCommit('HEAD');
+let commit = rawCommit('HEAD');
 console.log(`pushing ${head.slice(0, 7)} to ${owner}/${repo}#${branch}`);
 console.log(`  identity: ${commit.author.name} <${commit.author.email}> ${commit.author.date}`);
+
+/**
+ * GitHub normalises commit timestamps to UTC, so a commit stored locally as
+ * `+0800` comes back as the same instant in `+0000` - a different object, and
+ * therefore a different SHA for identical content. Amending the local commit to
+ * the UTC spelling first is what lets both sides agree on the first try.
+ */
+if (commit.committer.zone !== '+0000' || commit.author.zone !== '+0000') {
+  const utc = commit.committer.date;
+  console.log(`  normalising the local timestamp ${commit.committer.zone} -> +0000 so the SHAs can match`);
+  execFileSync('git', ['commit', '--amend', '--no-edit', '--date', utc], {
+    cwd: ROOT,
+    stdio: 'ignore',
+    env: { ...process.env, GIT_AUTHOR_DATE: utc, GIT_COMMITTER_DATE: utc },
+  });
+  commit = rawCommit('HEAD');
+}
+
+const localHead = git('rev-parse', 'HEAD');
 
 const ref = await api('GET', `/repos/${owner}/${repo}/git/ref/heads/${branch}`).catch(() => null);
 const remoteHead = ref?.object?.sha ?? null;
 console.log(`  remote head: ${remoteHead ? remoteHead.slice(0, 7) : '(none)'}`);
 
-if (remoteHead === head) {
+if (remoteHead === localHead) {
   console.log('  already up to date.');
   process.exit(0);
 }
@@ -164,7 +183,7 @@ const created = await api('POST', `/repos/${owner}/${repo}/git/commits`, {
   author: { name: commit.author.name, email: commit.author.email, date: commit.author.date },
   committer: { name: commit.committer.name, email: commit.committer.email, date: commit.committer.date },
 });
-console.log(`  commit ${created.sha.slice(0, 7)}${created.sha === head ? ' (matches local)' : ` (LOCAL IS ${head.slice(0, 7)})`}`);
+console.log(`  commit ${created.sha.slice(0, 7)}${created.sha === localHead ? ' (matches local)' : ` (LOCAL IS ${localHead.slice(0, 7)})`}`);
 
 if (remoteHead) {
   await api('PATCH', `/repos/${owner}/${repo}/git/refs/heads/${branch}`, { sha: created.sha, force: true });
@@ -173,7 +192,7 @@ if (remoteHead) {
 }
 
 console.log(`\npushed: https://github.com/${owner}/${repo}/commit/${created.sha}`);
-if (created.sha !== head) {
+if (created.sha !== localHead) {
   console.log('\nNOTE: the remote SHA differs from the local one.');
   console.log('Run `git fetch origin && git reset --hard origin/' + branch + '` once github.com is reachable.');
   process.exitCode = 3;
