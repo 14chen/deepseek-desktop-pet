@@ -72,7 +72,13 @@
     <section class="card quota-card" id="quotaCard">
       <div class="card-head">
         <h2>DeepSeek 额度</h2>
-        <span class="badge" id="quotaBadge">未知</span>
+        <div class="head-actions">
+          <span class="badge" id="quotaBadge">未知</span>
+          <button class="btn small primary" id="refreshQuotaBtn" type="button">
+            <span class="spin-target" id="refreshIcon" aria-hidden="true">⟳</span>
+            刷新额度
+          </button>
+        </div>
       </div>
       <div class="quota-body">
         <div class="ring-wrap">
@@ -152,6 +158,43 @@
         <button class="btn primary" type="submit" aria-label="添加">+</button>
       </form>
       <ul class="todos" id="todoList"></ul>
+    </section>
+
+    <!-- Desktop pet controls -->
+    <section class="card" id="controlCard">
+      <div class="card-head"><h2>桌宠控制</h2><span class="badge" id="sizeBadge">1.00x</span></div>
+
+      <div class="control">
+        <label class="control-label" for="scaleRange">
+          桌宠大小
+          <span class="control-hint" id="scaleHint">拖动即时生效</span>
+        </label>
+        <div class="slider-row">
+          <button class="icon-btn small" id="scaleDown" type="button" aria-label="缩小">−</button>
+          <input type="range" id="scaleRange" min="50" max="300" step="5" value="100"
+                 aria-label="桌宠大小" aria-valuetext="1.00x">
+          <button class="icon-btn small" id="scaleUp" type="button" aria-label="放大">+</button>
+        </div>
+        <div class="quick-row">
+          <button class="btn small" data-scale="0.7" type="button">小</button>
+          <button class="btn small" data-scale="1" type="button">标准</button>
+          <button class="btn small" data-scale="1.5" type="button">大</button>
+          <button class="btn small" data-scale="2" type="button">超大</button>
+        </div>
+      </div>
+
+      <div class="control">
+        <span class="control-label">
+          桌面悬浮窗
+          <span class="control-hint" id="desktopState">—</span>
+        </span>
+        <div class="quick-row">
+          <button class="btn small" id="desktopShow" type="button">显示</button>
+          <button class="btn small" id="desktopRestart" type="button">重启</button>
+          <button class="btn small ghost" id="desktopHide" type="button">隐藏</button>
+          <button class="btn small ghost" id="muteToggle" type="button" aria-pressed="false">静音</button>
+        </div>
+      </div>
     </section>
 
   </div>

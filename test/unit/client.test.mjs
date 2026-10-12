@@ -330,6 +330,27 @@ await check('the stale banner has markup and styling', async () => {
   assertMatch(css, /\.stale-banner/, 'the banner is styled');
 });
 
+await check('the page exposes a size control and a quota refresh button', async () => {
+  const html = fs.readFileSync(path.join(WEB, 'index.html'), 'utf8');
+  assertMatch(html, /id="scaleRange"/, 'a size slider exists');
+  assertMatch(html, /type="range"/, 'and it really is a range input');
+  assertMatch(html, /id="refreshQuotaBtn"/, 'a labelled quota refresh button exists');
+  assertMatch(html, /刷新额度/, 'with a readable label, not just an icon');
+  assertMatch(html, /data-scale="1\.5"/, 'and quick size presets');
+
+  const script = fs.readFileSync(path.join(WEB, 'pet.js'), 'utf8');
+  assertMatch(script, /desktopScale: clamped/, 'the slider pushes the scale setting');
+  assertMatch(script, /dom\.scaleRange\.addEventListener\('input'/, 'and reacts while dragging');
+  assertMatch(script, /function refreshQuota/, 'the refresh button has a handler');
+  assertMatch(script, /classList\.add\('busy'\)/, 'which shows it is working');
+});
+
+await check('the size slider does not fight the user mid-drag', async () => {
+  const script = fs.readFileSync(path.join(WEB, 'pet.js'), 'utf8');
+  // A state frame arriving during a drag must not snap the handle back.
+  assertMatch(script, /if \(scaleTimer === null\)/, 'the slider is left alone while a change is pending');
+});
+
 // --- responsive contract --------------------------------------------------
 await check('the stylesheet keeps its documented breakpoints', async () => {
   const css = fs.readFileSync(path.join(WEB, 'pet.css'), 'utf8');

@@ -35,6 +35,14 @@ except ImportError:  # pragma: no cover - Pillow is a documented prerequisite
     print("build-assets: Pillow is required (pip install Pillow)", file=sys.stderr)
     raise SystemExit(2)
 
+# The Q-version is drawn by a sibling module; importing it here keeps one entry
+# point for `npm run build:assets`.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from chibi import draw_chibi
+except ImportError:  # pragma: no cover - the module ships with the tool
+    draw_chibi = None
+
 # numpy is only needed to drop detached fragments from an ML matte. Without it,
 # that step is skipped and everything else still works.
 try:
@@ -383,6 +391,15 @@ def _reapply(size: tuple[int, int], image: Image.Image) -> Image.Image:
     return layer
 
 
+def crop_normalised(image: Image.Image, box: tuple[float, float, float]) -> Image.Image:
+    """Crop a normalised square (centre x, centre y, half-size) and re-square it."""
+    cx, cy, half = box
+    side = int(min(image.width, image.height) * half * 2)
+    left = max(0, min(image.width - side, int(image.width * cx - side / 2)))
+    top = max(0, min(image.height - side, int(image.height * cy - side / 2)))
+    return square(image.crop((left, top, left + side, top + side)))
+
+
 def head_crop(image: Image.Image, band_ratio: float = 0.34) -> Image.Image:
     """Crop to the head and shoulders of the subject.
 
@@ -726,9 +743,30 @@ def build() -> int:
     os.makedirs(WEB_ASSETS, exist_ok=True)
 
     source = find_source()
-    art = None
+    # `PET_ART` chooses what the pet actually looks like:
+    #   chibi    - the Q-version drawn from the character's design (default when
+    #              a source picture is present, which is what it is based on);
+    #   source   - the supplied picture itself, cut out or framed;
+    #   fallback - the drawn mascot, used when there is no source at all.
+    mode = (os.environ.get("PET_ART") or ("chibi" if source else "fallback")).strip().lower()
     if source:
         print(f"build-assets: source = {source}")
+
+    art = None
+    face_box = None
+    if mode == "chibi" and draw_chibi is not None:
+        print("build-assets: drawing the Q-version of the character")
+        art = draw_chibi(1024)
+        try:
+            from chibi import FACE_BOX
+            face_box = FACE_BOX
+        except ImportError:  # pragma: no cover - guarded with the module above
+            face_box = None
+        print("build-assets: chibi composed from the source palette")
+    elif mode == "fallback":
+        print("build-assets: no source found - generating the drawn mascot")
+        art = draw_fallback(1024)
+    elif source:
         with Image.open(source) as opened:
             original = opened.convert("RGBA")
 
@@ -762,7 +800,7 @@ def build() -> int:
                 art = build_badge(original)
                 print(f"build-assets: badge crop = {auto_crop_box(original)}")
     else:
-        print("build-assets: no pet-source found - generating fallback mascot art")
+        print(f"build-assets: PET_ART={mode} needs a source picture; using the drawn mascot")
         art = draw_fallback(1024)
 
     art = square(art)
@@ -786,19 +824,27 @@ def build() -> int:
     draw_fallback(512).resize((512, 512), Image.Resampling.LANCZOS).save(fallback, "PNG", optimize=True)
     outputs.append(fallback)
 
+    # The avatar and the tray icon need the face, not the figure. The chibi
+    # generator states where its face is; for a supplied picture the top of the
+    # alpha bounds is a good enough guess.
+    if mode == "chibi" and draw_chibi is not None and face_box is not None:
+        focus = crop_normalised(master, face_box)
+    else:
+        focus = head_crop(master)
+
     avatar = os.path.join(ASSETS, "avatar.png")
-    circular_avatar(master, 128).save(avatar, "PNG", optimize=True)
+    circular_avatar(focus, 128, focus_head=False).save(avatar, "PNG", optimize=True)
     outputs.append(avatar)
 
     ico = os.path.join(ASSETS, "pet.ico")
-    tray_icon(master, 256).save(ico, sizes=[(s, s) for s in ICO_SIZES])
+    focus.resize((256, 256), Image.Resampling.LANCZOS).save(ico, sizes=[(s, s) for s in ICO_SIZES])
     outputs.append(ico)
 
     # The web page and the in-app overlay read from web/assets.
     for name, size in (("pet.png", 512), ("pet-256.png", 256), ("pet-128.png", 128), ("avatar.png", 128)):
         target = os.path.join(WEB_ASSETS, name)
         if name == "avatar.png":
-            circular_avatar(master, size).save(target, "PNG", optimize=True)
+            circular_avatar(focus, size, focus_head=False).save(target, "PNG", optimize=True)
         else:
             master.resize((size, size), Image.Resampling.LANCZOS).save(target, "PNG", optimize=True)
         outputs.append(target)

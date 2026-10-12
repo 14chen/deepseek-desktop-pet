@@ -47,12 +47,29 @@ The platform API exposes wallet balances, not usage, so the plugin derives the s
 
 ### Interacting with the window
 
+- **Three always-visible buttons** — refresh the platform balance, open the web page, or start a 25-minute focus block, without leaving the desktop
 - **Drag** it anywhere; the position is remembered
 - **Click** to stroke it — it reacts, affection grows, and it says something
-- **Right-click** for a menu: greet, check quota, focus 25 minutes, quiet, open DSH, hide, quit
+- **Right-click** for a menu: greet, check quota, open the page, open DSH, larger, smaller, reset size, focus, stop timer, quiet, hide, quit
 - **Hover** for a tooltip: level, balance, tasks done today, affection, timer remaining
-- **Ambient animation** — breathing, drifting, faster when it is busy, sleepy when you are away
+- **Ambient animation** — breathing and drifting, faster when it is busy, sleepy when you are away
 - **Tray icon**, because the window has no taskbar entry and you still need to find it again
+
+### Resizing the pet
+
+Three ways, all **immediate and without a restart**:
+
+1. **A slider on the web page** — continuously from 0.5x to 3x, plus small/standard/large/extra-large presets
+2. **The context menu** — larger, smaller, reset
+3. **A command** — `/pet scale 1.5`
+
+The host publishes `desktopScale` in the shared state and the window resizes
+*itself* from that snapshot on each poll, rather than being relaunched. It grows
+from its bottom-right anchor so it does not crawl across the screen.
+
+> This fixed a real bug: changing the size used to only take effect on the next
+> launch, because the host saw the window already running and returned early
+> without re-reading the config.
 
 ### Extras that turned out to be worth having
 
@@ -169,15 +186,41 @@ Every default is documented in [`cordis.patch.yml`](cordis.patch.yml).
 
 ## Using your own artwork
 
-Drop the picture into the project root (its parent directory works too) and rebuild:
+The pet is a **Q-version drawn in code**, based on the character in the supplied
+illustration: silver-white hair, crimson eyes, white mecha plate over a black
+under-suit with cyan seams, a raised red blade, and the original's holographic
+cyan accents. A third of the figure is head, which is what makes it a chibi.
+
+Two cheaper routes were tried and rejected:
+
+- **A big-head warp** (squashing a seven-head figure into two) distorts whatever
+  crosses the split. Here the sword and the long hair both do, and the result
+  reads as a funhouse mirror rather than as a chibi.
+- **A framed portrait** is faithful, but that is a badge, not a Q-version.
+
+So `tools/chibi.py` redraws her from geometry. It composes at 3x and downsamples
+— the only way to get clean curves out of Pillow's aliased primitives — then
+adds a sticker outline, a rim glow and a contact shadow.
+
+```
+node tools/build-assets.mjs                   # default: draw the Q-version
+PET_ART=source node tools/build-assets.mjs    # use your picture: cut-out or badge
+PET_ART=fallback node tools/build-assets.mjs  # the original drawn mascot
+```
+
+To restyle the Q-version, edit `tools/chibi.py`: the palette is at the top and
+each part (hair, body, arms, sword, head, face) is its own function. `FACE_BOX`
+tells the build where to crop the avatar.
+
+### Supplying a picture instead
 
 ```bash
 # pet-source.png, pet-source.jpg and pet-source.png.jpg are all recognised
-copy your-image.png  F:\devbox\deepseek-desktop-pet\pet-source.png
-node tools/build-assets.mjs
+copy your-image.png  pet-source.png
+PET_ART=source node tools/build-assets.mjs
 ```
 
-The builder picks a strategy from **what the picture actually is** rather than applying one recipe to everything:
+The builder then picks a strategy from **what the picture actually is**:
 
 | Your picture | What happens |
 |---|---|
@@ -185,27 +228,34 @@ The builder picks a strategy from **what the picture actually is** rather than a
 | **Opaque, with a flat outer border** | The flat colour is flood-filled from the edges. Searching from the outside means interior regions of the same colour — a white shirt, an eye highlight — are left alone |
 | **A full illustration** (subject plus a busy background) | An ML matte first; the badge composition when no model is installed |
 
-The illustration case deserves honesty: **colour alone cannot cut it out.** The subject shares its palette with the background, hair strands are sub-pixel, and the only real boundary is the outline. So:
+The illustration case deserves honesty: **colour alone cannot cut it out.** Two
+layers handle it:
 
-1. **An ML matte**, when `rembg` with the `isnet-anime` model is installed — a model trained specifically on anime. It produces a clean subject with alpha matting keeping the hair soft, then drops anything not connected to the subject (floating props, background slivers) and trims to the alpha bounds.
-2. **A badge composition otherwise.** The character is framed in a luminous disc: the rim is darkened radially so the face stays the brightest thing, a contact shadow makes it float, and a cyan-to-white ring takes its shape language from the holographic rings already in the artwork. A single red accent echoes the blade. It reads as *this* character rather than a generic frame.
-
-Installing the optional matte (about 180 MB, into a directory outside the project, leaving your DSH runtime untouched):
+1. **An ML matte**, when `rembg` with the `isnet-anime` model is installed — a
+   model trained specifically on anime. It produces a clean subject with alpha
+   matting keeping the hair soft, then drops anything not connected to the
+   subject and trims to the alpha bounds.
+2. **A badge composition otherwise.** The character is framed in a luminous
+   disc whose shape language comes from the holographic rings already in the
+   artwork, with one red accent echoing the blade.
 
 ```bash
 python -m pip install --target F:\devbox\pet-tools\pysite rembg onnxruntime
 set PET_SEG_SITE=F:\devbox\pet-tools\pysite
 set PET_CUTOUT_MODEL=isnet-anime
+set PET_ART=source
 node tools/build-assets.mjs
 ```
 
-The weights download on first use (about 168 MB) into `~/.u2net/`.
+`PET_CUTOUT=0` keeps a build reproducible without the model — which is what the
+test suite uses.
 
-`PET_CUTOUT=0` forces the badge path, which is what keeps a build reproducible on a machine without the model — and what the test suite uses.
-
-The build also needs Python with Pillow (`pip install Pillow`). That is the only place it is used; nothing at runtime depends on it.
-
-Either way, the build produces 512/256/128/64 PNGs, a multi-size ICO for the notification area, a circular avatar, and the contact shadow and rim glow underneath. **The avatar and the tray icon are cropped to the head automatically** — a full figure shrunk to 128 px, or worse 16 px, is unreadable.
+The build needs Python with Pillow (`pip install Pillow`); nothing at runtime
+does. Either way it produces 512/256/128/64 PNGs, a multi-size ICO, a circular
+avatar, and the shadow and glow underneath. **The avatar and tray icon are
+cropped to the face** — a full figure at 128 px, or worse 16 px, is unreadable.
+The Q-version states its face position explicitly, because the blade reaches
+higher than the head and a bounding-box crop lands on the sword.
 
 ---
 

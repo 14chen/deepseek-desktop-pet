@@ -42,6 +42,13 @@ export const WINDOW_LABELS = {
   tooltipMinutes: '分',
   tooltipSeconds: '秒',
   reading: '读取中…',
+  // Small buttons that appear over the pet while the pointer is on it.
+  btnRefreshQuota: '刷新额度',
+  btnOpenPage: '桌宠网页',
+  btnFocus: '专注',
+  menuGrow: '放大',
+  menuShrink: '缩小',
+  menuResetSize: '恢复大小',
 };
 
 /** Merge a user override over the defaults, keeping unknown keys out. */

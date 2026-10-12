@@ -281,9 +281,17 @@ export function apply(ctx, config = {}) {
       }
     });
     if (changed.length === 0) return { ok: true, message: '设置没有变化' };
-    // Position and scale changes need the window to pick up a new config.
-    if (changed.some((key) => key === 'desktopScale' || key === 'alwaysOnTop')) {
-      bridge.start();
+    // Scale and always-on-top are applied by the window itself, from the live
+    // snapshot, so it never has to be restarted to pick them up.
+    if (changed.includes('alwaysOnTop')) {
+      try {
+        fs.writeFileSync(store.commandFile, JSON.stringify({ cmd: 'reload', at: Date.now() }), 'utf8');
+      } catch {
+        /* the next launch applies it */
+      }
+    }
+    if (changed.length === 1 && changed[0] === 'desktopScale') {
+      return { ok: true, message: `桌宠大小：${Number(next.desktopScale).toFixed(2)}x` };
     }
     return { ok: true, message: `已更新：${changed.join('、')}` };
   }
@@ -331,6 +339,8 @@ export function apply(ctx, config = {}) {
       case 'mute':
       case 'unmute':
       case 'settings':
+      case 'scale':
+      case 'scale-step':
       case 'hide-desktop':
         if (message) {
           hub.toast({
@@ -511,6 +521,21 @@ export function apply(ctx, config = {}) {
         }
         case 'settings': {
           return applySettings(action.settings);
+        }
+        case 'scale': {
+          const value = Number(action.value ?? action.scale);
+          if (!Number.isFinite(value)) return { ok: false, message: '无效的缩放值' };
+          return applySettings({ desktopScale: value });
+        }
+        case 'scale-step': {
+          // Incremental, so a menu item or a wheel gesture can nudge the pet
+          // without the caller having to know the current value.
+          const delta = Number(action.delta);
+          if (!Number.isFinite(delta)) return { ok: false, message: '无效的缩放步长' };
+          const current = Number(state().settings.desktopScale) || 1;
+          const next = Math.round(Math.min(3, Math.max(0.5, current + delta)) * 100) / 100;
+          const result = applySettings({ desktopScale: next });
+          return { ...result, message: result.ok === false ? result.message : `桌宠大小：${next.toFixed(2)}x` };
         }
 
         // ----------------------------------------------------------- todos

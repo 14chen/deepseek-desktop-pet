@@ -911,6 +911,78 @@ await check('the window tags its actions with their source', async () => {
   assert(fromTray >= 3, `expected the tray menu to tag its actions, found ${fromTray}`);
 });
 
+await check('the pet can be resized, and the value is clamped', async () => {
+  const before = (await host.state()).settings.desktopScale;
+
+  const larger = await host.post('scale-step', { delta: 0.15 });
+  assertEqual(larger.ok, true, 'stepping up works');
+  const after = (await host.state()).settings.desktopScale;
+  assert(Math.abs(after - (before + 0.15)) < 0.001, `expected ${before + 0.15}, got ${after}`);
+  assertMatch(larger.message, /x$/, 'the reply states the new size');
+
+  // The window cannot draw outside these bounds, so neither may the setting.
+  for (const value of [0.1, 99]) {
+    const result = await host.post('scale', { value });
+    assertEqual(result.ok, true, `scale ${value} is accepted`);
+    const applied = (await host.state()).settings.desktopScale;
+    assert(applied >= 0.5 && applied <= 3, `scale ${value} must clamp, got ${applied}`);
+  }
+
+  await host.post('settings', { settings: { desktopScale: 1 } });
+  const reset = (await host.state()).settings.desktopScale;
+  assertEqual(reset, 1, 'reset works');
+});
+
+await check('an incremental step never leaves the allowed range', async () => {
+  await host.post('settings', { settings: { desktopScale: 0.55 } });
+  for (let index = 0; index < 6; index += 1) await host.post('scale-step', { delta: -0.15 });
+  assertEqual((await host.state()).settings.desktopScale, 0.5, 'floors at 0.5');
+
+  await host.post('settings', { settings: { desktopScale: 2.95 } });
+  for (let index = 0; index < 6; index += 1) await host.post('scale-step', { delta: 0.15 });
+  assertEqual((await host.state()).settings.desktopScale, 3, 'ceilings at 3');
+
+  await host.post('settings', { settings: { desktopScale: 1 } });
+});
+
+await check('a resize is answered so the control does not look dead', async () => {
+  await host.post('dismiss-all');
+  await host.post('scale-step', { delta: 0.15 });
+  const state = await host.state();
+  assert(state.toast, 'a confirmation bubble is raised');
+  assertMatch(state.toast.text, /大小|x/, 'and it states the new size');
+  await host.post('settings', { settings: { desktopScale: 1 } });
+});
+
+await check('the window applies a scale change without relaunching', async () => {
+  // The window reads `settings.desktopScale` from the live snapshot, so the
+  // setting has to be published there - not merely stored in the plugin.
+  const script = fs.readFileSync(path.join(ROOT, 'desktop', 'pet-window.ps1'), 'utf8');
+  assertMatch(script, /function Apply-Scale/, 'the window can resize itself');
+  assertMatch(script, /Apply-Scale -NewScale \(\[double\]\$desiredScale\)/, 'and reads the wanted scale from the state');
+  assertMatch(script, /\$state\.settings/, 'from the settings block');
+});
+
+await check('the window offers a refresh-quota button', async () => {
+  const script = fs.readFileSync(path.join(ROOT, 'desktop', 'pet-window.ps1'), 'utf8');
+  assertMatch(script, /\$buttonBar/, 'there is a quick-action strip');
+  assertMatch(script, /New-PetButton -Label \$ui\.btnRefreshQuota/, 'with a quota button');
+  assertMatch(script, /Send-Action -Type 'refresh-quota' -Payload @\{ source = 'button' \}/, 'that asks for a refresh');
+  assertMatch(script, /-Label \$ui\.btnOpenPage/, 'and a way to reach the page');
+  // It has to be visible without hovering: a control nobody finds is no control.
+  assertMatch(script, /\[void\]\$root\.Children\.Add\(\$buttonBar\)/, 'the strip is mounted');
+  assert(!/\$buttonBar\.Opacity\s*=\s*0/.test(script), 'and it is not hidden behind a hover');
+});
+
+await check('the window menu can grow and shrink the pet', async () => {
+  const script = fs.readFileSync(path.join(ROOT, 'desktop', 'pet-window.ps1'), 'utf8');
+  assertMatch(script, /menuGrow/, 'a grow entry');
+  assertMatch(script, /menuShrink/, 'a shrink entry');
+  assertMatch(script, /menuResetSize/, 'and a reset');
+  assertMatch(script, /Send-Action -Type 'scale-step' -Payload @\{ delta = 0\.15/, 'grow steps up');
+  assertMatch(script, /Send-Action -Type 'scale-step' -Payload @\{ delta = -0\.15/, 'shrink steps down');
+});
+
 // --- 13. Degraded environments --------------------------------------------
 await check('the plugin loads without tools, commands or a webserver', async () => {
   const ctx = new HarnessContext('bare');

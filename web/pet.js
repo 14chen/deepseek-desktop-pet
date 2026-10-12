@@ -52,6 +52,18 @@ const dom = {
   xpLabel: $('xpLabel'),
   hint: $('hint'),
   quotaBadge: $('quotaBadge'),
+  refreshQuotaBtn: $('refreshQuotaBtn'),
+  refreshIcon: $('refreshIcon'),
+  scaleRange: $('scaleRange'),
+  scaleDown: $('scaleDown'),
+  scaleUp: $('scaleUp'),
+  sizeBadge: $('sizeBadge'),
+  scaleHint: $('scaleHint'),
+  desktopShow: $('desktopShow'),
+  desktopRestart: $('desktopRestart'),
+  desktopHide: $('desktopHide'),
+  desktopState: $('desktopState'),
+  muteToggle: $('muteToggle'),
   ringValue: $('ringValue'),
   ringPercent: $('ringPercent'),
   balanceTotal: $('balanceTotal'),
@@ -465,6 +477,19 @@ function render(snapshot) {
 
   dom.soundBtn.setAttribute('aria-pressed', String(Boolean(state.sound)));
 
+  // The controls mirror the world. The slider is left alone while it is being
+  // dragged, otherwise a state frame arriving mid-drag would fight the user.
+  const scale = Number(settings.desktopScale) || 1;
+  if (scaleTimer === null) {
+    dom.scaleRange.value = String(Math.round(scale * 100));
+  }
+  paintScale(scale);
+  dom.muteToggle.setAttribute('aria-pressed', String(Boolean(settings.mute)));
+  dom.muteToggle.textContent = settings.mute ? '已静音' : '静音';
+  dom.desktopState.textContent = snapshot.bridge?.desktopRunning
+    ? `运行中 (PID ${snapshot.bridge.desktopPid ?? '?'})`
+    : '未运行';
+
   renderBubble(snapshot.toast);
   renderQuota(snapshot.quota ?? {});
   renderStats(snapshot);
@@ -603,10 +628,68 @@ dom.soundBtn.addEventListener('click', () => {
   if (state.sound) beep('info');
 });
 
-dom.refreshBtn.addEventListener('click', async () => {
-  dom.refreshBtn.disabled = true;
-  await send('refresh-quota');
-  setTimeout(() => { dom.refreshBtn.disabled = false; }, 900);
+dom.refreshBtn.addEventListener('click', () => void refreshQuota());
+dom.refreshQuotaBtn.addEventListener('click', () => void refreshQuota());
+
+/**
+ * Refresh the balance, showing that the request is real.
+ *
+ * A quota read is an authenticated round trip to the platform, so the button
+ * has to say it is working - otherwise a slow read looks like a dead control,
+ * which is exactly how the earlier icon-only affordance was read.
+ */
+async function refreshQuota() {
+  if (dom.refreshQuotaBtn.disabled) return;
+  dom.refreshQuotaBtn.disabled = true;
+  dom.refreshQuotaBtn.classList.add('busy');
+  dom.refreshIcon.textContent = '⟳';
+  const started = Date.now();
+  const result = await send('refresh-quota');
+  // Keep the spinner up long enough to be seen on a fast local read.
+  const elapsed = Date.now() - started;
+  if (elapsed < 450) await new Promise((resolve) => setTimeout(resolve, 450 - elapsed));
+  dom.refreshQuotaBtn.classList.remove('busy');
+  dom.refreshQuotaBtn.disabled = false;
+  if (result?.ok === false) pushToast({ kind: 'error', text: result.message ?? '刷新失败' });
+  else pushToast({ kind: 'done', text: result?.message ?? '额度已刷新' });
+}
+
+// --- size ---------------------------------------------------------------
+let scaleTimer = null;
+
+/** Push a new scale, debounced so dragging the slider does not spam the host. */
+function pushScale(value) {
+  const clamped = Math.min(3, Math.max(0.5, value));
+  dom.scaleRange.value = String(Math.round(clamped * 100));
+  paintScale(clamped);
+  if (scaleTimer) clearTimeout(scaleTimer);
+  scaleTimer = setTimeout(() => {
+    scaleTimer = null;
+    void send('settings', { settings: { desktopScale: clamped } });
+  }, 220);
+}
+
+function paintScale(value) {
+  const text = `${value.toFixed(2)}x`;
+  dom.sizeBadge.textContent = text;
+  dom.scaleRange.setAttribute('aria-valuetext', text);
+  dom.scaleHint.textContent = value <= 0.75 ? '小巧' : value >= 2 ? '醒目' : '拖动即时生效';
+}
+
+dom.scaleRange.addEventListener('input', () => pushScale(Number(dom.scaleRange.value) / 100));
+dom.scaleDown.addEventListener('click', () => pushScale(Number(dom.scaleRange.value) / 100 - 0.15));
+dom.scaleUp.addEventListener('click', () => pushScale(Number(dom.scaleRange.value) / 100 + 0.15));
+for (const button of document.querySelectorAll('[data-scale]')) {
+  button.addEventListener('click', () => pushScale(Number(button.dataset.scale)));
+}
+
+// --- window and mute ----------------------------------------------------
+dom.desktopShow.addEventListener('click', () => void send('show'));
+dom.desktopRestart.addEventListener('click', () => void send('restart'));
+dom.desktopHide.addEventListener('click', () => void send('hide-desktop'));
+dom.muteToggle.addEventListener('click', () => {
+  const muted = dom.muteToggle.getAttribute('aria-pressed') === 'true';
+  void send(muted ? 'unmute' : 'mute');
 });
 
 dom.pomoStart.addEventListener('click', () => void send('pomodoro-start'));

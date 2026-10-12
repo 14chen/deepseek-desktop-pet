@@ -141,6 +141,12 @@ $ui = @{
   tooltipMinutes  = 'm'
   tooltipSeconds  = 's'
   reading         = 'reading...'
+  btnRefreshQuota = 'Quota'
+  btnOpenPage     = 'Page'
+  btnFocus        = 'Focus'
+  menuGrow        = 'Larger'
+  menuShrink      = 'Smaller'
+  menuResetSize   = 'Reset size'
 }
 $labelProperty = $config.PSObject.Properties['labels']
 if ($null -ne $labelProperty -and $null -ne $labelProperty.Value) {
@@ -171,10 +177,20 @@ $startMinimized = [bool](Get-ConfigValue 'startMinimized' $false)
 if ($scale -le 0) { $scale = 1.0 }
 $scale = [Math]::Min(3.0, [Math]::Max(0.5, $scale))
 
-# Reserve a band above the pet for the speech bubble.
+# Reserve a band above the pet for the speech bubble, and a strip below it for
+# the quick-action buttons.
 $bubbleBand = [Math]::Round(96 * [Math]::Max(1.0, $scale))
+$buttonBand = [Math]::Round(36 * [Math]::Max(1.0, $scale))
 $winWidth = [Math]::Round($baseWidth * $scale)
-$winHeight = [Math]::Round($baseHeight * $scale) + $bubbleBand
+$winHeight = [Math]::Round($baseHeight * $scale) + $bubbleBand + $buttonBand
+
+# Kept for the live resize path: the window can change scale while it runs, so
+# the unscaled geometry has to stay available.
+$script:baseWidth = $baseWidth
+$script:baseHeight = $baseHeight
+$script:bubbleBand = $bubbleBand
+$script:buttonBand = $buttonBand
+$script:currentScale = $scale
 
 # ---------------------------------------------------------------------------
 # Image loading
@@ -245,9 +261,12 @@ $root.Background = [System.Windows.Media.Brushes]::Transparent
 $rowBubble = New-Object System.Windows.Controls.RowDefinition
 $rowBubble.Height = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Star)
 $rowPet = New-Object System.Windows.Controls.RowDefinition
-$rowPet.Height = New-Object System.Windows.GridLength($winHeight - $bubbleBand)
+$rowPet.Height = New-Object System.Windows.GridLength($baseHeight * $scale)
+$rowButtons = New-Object System.Windows.Controls.RowDefinition
+$rowButtons.Height = New-Object System.Windows.GridLength($buttonBand)
 [void]$root.RowDefinitions.Add($rowBubble)
 [void]$root.RowDefinitions.Add($rowPet)
+[void]$root.RowDefinitions.Add($rowButtons)
 
 # --- speech bubble -------------------------------------------------------
 $bubble = New-Object System.Windows.Controls.Border
@@ -300,6 +319,7 @@ if ($null -ne $petBitmap) {
   $image.Effect = New-Object System.Windows.Media.Effects.DropShadowEffect -Property @{
     BlurRadius = 22; ShadowDepth = 6; Opacity = 0.4; Color = [System.Windows.Media.Colors]::Black
   }
+  $script:petImage = $image
   [void]$petHost.Children.Add($image)
 } else {
   # Last-resort art so the pet is never invisible, even with no assets at all.
@@ -323,6 +343,111 @@ if ($null -ne $petBitmap) {
 
 [System.Windows.Controls.Grid]::SetRow($petHost, 1)
 [void]$root.Children.Add($petHost)
+
+# --- quick-action buttons ------------------------------------------------
+# Always visible rather than hover-only: a control nobody can find is the same
+# as no control, and the quota refresh is the one thing worth a permanent tap
+# target on the desktop.
+$buttonBar = New-Object System.Windows.Controls.StackPanel
+$buttonBar.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+$buttonBar.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+$buttonBar.VerticalAlignment = [System.Windows.VerticalAlignment]::Top
+$buttonBar.Margin = New-Object System.Windows.Thickness(0, 4, 0, 0)
+[System.Windows.Controls.Grid]::SetRow($buttonBar, 2)
+
+<#
+.SYNOPSIS
+  Build one rounded pill button for the quick-action strip.
+#>
+function New-PetButton {
+  param([string]$Label, [scriptblock]$OnClick, [string]$Tooltip = '')
+
+  $button = New-Object System.Windows.Controls.Button
+  $button.Content = $Label
+  $button.FontSize = [Math]::Round(12 * [Math]::Max(0.85, $script:currentScale))
+  $button.Foreground = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(255, 236, 243, 253))
+  $button.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(226, 22, 28, 40))
+  $button.BorderBrush = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(170, 130, 185, 255))
+  $button.BorderThickness = New-Object System.Windows.Thickness(1)
+  $button.Padding = New-Object System.Windows.Thickness(11, 4, 11, 4)
+  $button.Margin = New-Object System.Windows.Thickness(3, 0, 3, 0)
+  $button.Cursor = [System.Windows.Input.Cursors]::Hand
+  $button.ToolTip = $Tooltip
+  $button.Add_Click($OnClick)
+  $button.Effect = New-Object System.Windows.Media.Effects.DropShadowEffect -Property @{
+    BlurRadius = 8; ShadowDepth = 1; Opacity = 0.35; Color = [System.Windows.Media.Colors]::Black
+  }
+
+  # A rounded, flat pill rather than the default chrome.
+  $template = New-Object System.Windows.Controls.ControlTemplate([System.Windows.Controls.Button])
+  $border = New-Object System.Windows.FrameworkElementFactory([System.Windows.Controls.Border])
+  $border.SetValue([System.Windows.Controls.Border]::CornerRadiusProperty, (New-Object System.Windows.CornerRadius(11)))
+  $border.SetValue([System.Windows.Controls.Border]::BackgroundProperty, (New-Object System.Windows.TemplateBindingExtension([System.Windows.Controls.Control]::BackgroundProperty)))
+  $border.SetValue([System.Windows.Controls.Border]::BorderBrushProperty, (New-Object System.Windows.TemplateBindingExtension([System.Windows.Controls.Border]::BorderBrushProperty)))
+  $border.SetValue([System.Windows.Controls.Border]::BorderThicknessProperty, (New-Object System.Windows.TemplateBindingExtension([System.Windows.Controls.Control]::BorderThicknessProperty)))
+  $content = New-Object System.Windows.FrameworkElementFactory([System.Windows.Controls.ContentPresenter])
+  $content.SetValue([System.Windows.Controls.ContentPresenter]::HorizontalAlignmentProperty, [System.Windows.HorizontalAlignment]::Center)
+  $content.SetValue([System.Windows.Controls.ContentPresenter]::VerticalAlignmentProperty, [System.Windows.VerticalAlignment]::Center)
+  [void]$border.AppendChild($content)
+  $template.VisualTree = $border
+  $button.Template = $template
+  return $button
+}
+
+$buttonBar.AddChild((New-PetButton -Label $ui.btnRefreshQuota -Tooltip $ui.menuQuota -OnClick {
+  Send-Action -Type 'refresh-quota' -Payload @{ source = 'button' }
+  Invoke-Reaction -Kind 'spin'
+}))
+$buttonBar.AddChild((New-PetButton -Label $ui.btnOpenPage -Tooltip $ui.menuOpenPage -OnClick {
+  Send-Action -Type 'open-page' -Payload @{ source = 'button' }
+}))
+$buttonBar.AddChild((New-PetButton -Label $ui.btnFocus -Tooltip $ui.menuFocus -OnClick {
+  Send-Action -Type 'pomodoro-start' -Payload @{ minutes = 25; source = 'button' }
+  Invoke-Reaction -Kind 'bounce'
+}))
+
+[void]$root.Children.Add($buttonBar)
+
+<#
+.SYNOPSIS
+  Resize the window and the artwork for a new scale, without restarting.
+
+  The host publishes `settings.desktopScale` in the live snapshot, so a slider
+  on the web page or the context menu changes the desktop pet immediately -
+  previously the setting only took effect on the next launch, because the window
+  is skipped when the bridge is already running.
+#>
+function Apply-Scale {
+  param([double]$NewScale)
+
+  if ($NewScale -le 0) { return }
+  $NewScale = [Math]::Min(3.0, [Math]::Max(0.5, $NewScale))
+  if ([Math]::Abs($NewScale - $script:currentScale) -lt 0.01) { return }
+
+  $script:currentScale = $NewScale
+  $bubbleBand = [Math]::Round(96 * [Math]::Max(1.0, $NewScale))
+  $buttonBand = [Math]::Round(36 * [Math]::Max(1.0, $NewScale))
+
+  # Grow from the same corner the window was placed at, so it does not crawl
+  # across the screen as it is resized.
+  $anchorRight = $window.Left + $window.Width
+  $anchorBottom = $window.Top + $window.Height
+
+  $window.Width = [Math]::Round($script:baseWidth * $NewScale)
+  $window.Height = [Math]::Round($script:baseHeight * $NewScale) + $bubbleBand + $buttonBand
+  $rowPet.Height = New-Object System.Windows.GridLength($script:baseHeight * $NewScale)
+  $rowButtons.Height = New-Object System.Windows.GridLength($buttonBand)
+
+  if ($null -ne $script:petImage) {
+    $script:petImage.Width = $script:baseWidth * $NewScale
+    $script:petImage.Height = $script:baseHeight * $NewScale
+  }
+  $bubbleText.FontSize = [Math]::Round(12.5 * [Math]::Max(1.0, $NewScale))
+
+  $window.Left = $anchorRight - $window.Width
+  $window.Top = $anchorBottom - $window.Height
+  Write-PetLog "scale changed to $NewScale ($($window.Width)x$($window.Height))"
+}
 
 $window.Content = $root
 
@@ -616,6 +741,11 @@ $petHost.Add_MouseRightButtonUp({
   [void](Add-MenuItem $menu $ui.menuStopTimer { Send-Action -Type 'pomodoro-stop' -Payload @{ source = 'menu' } })
   [void](Add-MenuItem $menu $ui.menuQuiet { Send-Action -Type 'dismiss-all' -Payload @{ source = 'menu' } })
   [void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
+  # Size, right where the user is already looking.
+  [void](Add-MenuItem $menu $ui.menuGrow { Send-Action -Type 'scale-step' -Payload @{ delta = 0.15; source = 'menu' } })
+  [void](Add-MenuItem $menu $ui.menuShrink { Send-Action -Type 'scale-step' -Payload @{ delta = -0.15; source = 'menu' } })
+  [void](Add-MenuItem $menu $ui.menuResetSize { Send-Action -Type 'settings' -Payload @{ settings = @{ desktopScale = 1 }; source = 'menu' } })
+  [void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
   [void](Add-MenuItem $menu $ui.menuHide { Send-Action -Type 'hide-desktop' -Payload @{ source = 'menu' } })
   [void](Add-MenuItem $menu $ui.menuQuit { Send-Action -Type 'quit-desktop' -Payload @{ source = 'menu' } })
 
@@ -705,6 +835,17 @@ function Update-FromState {
   }
 
   if ((Get-Date) -gt $script:bubbleHideAt) { Hide-Bubble }
+
+  # --- live size --------------------------------------------------------
+  # The host publishes the wanted scale, so a slider or a menu click resizes the
+  # pet immediately instead of waiting for the next launch.
+  $settings = $state.settings
+  if ($null -ne $settings) {
+    $desiredScale = $settings.desktopScale
+    if ($null -ne $desiredScale) {
+      Apply-Scale -NewScale ([double]$desiredScale)
+    }
+  }
 
   # --- ambient mood -----------------------------------------------------
   $mood = [string]$state.pet.mood

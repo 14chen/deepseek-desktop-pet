@@ -425,7 +425,9 @@ await check('an opaque picture with a flat background is optimized into transpar
     encoding: 'utf8',
     windowsHide: true,
     timeout: 180_000,
-    env: { ...process.env, PET_ASSET_ROOT: scratch },
+    // `PET_ART=source` selects the raw-picture pipeline; the default is now the
+    // drawn Q-version, which is covered by its own check below.
+    env: { ...process.env, PET_ASSET_ROOT: scratch, PET_ART: 'source' },
   });
   const log = `${built.stdout ?? ''}\n${built.stderr ?? ''}`;
   assertEqual(built.status, 0, `build failed:\n${log.slice(-600)}`);
@@ -498,9 +500,9 @@ await check('a full illustration is framed in a badge instead of being cut apart
     encoding: 'utf8',
     windowsHide: true,
     timeout: 240_000,
-    // Force the deterministic path: the optional ML matte is a large download
-    // and must never be what decides whether the build is reproducible.
-    env: { ...process.env, PET_ASSET_ROOT: scratch, PET_CUTOUT: '0' },
+    // The deterministic raw-picture path: the optional ML matte is a large
+    // download and must never decide whether the build is reproducible.
+    env: { ...process.env, PET_ASSET_ROOT: scratch, PET_ART: 'source', PET_CUTOUT: '0' },
   });
   const log = `${built.stdout ?? ''}\n${built.stderr ?? ''}`;
   assertEqual(built.status, 0, `build failed:\n${log.slice(-600)}`);
@@ -532,6 +534,67 @@ await check('a full illustration is framed in a badge instead of being cut apart
 
   fs.rmSync(scratch, { recursive: true, force: true });
 }, 300_000);
+
+// --- the drawn Q-version --------------------------------------------------
+await check('the default artwork is a drawn Q-version of the character', async () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-chibi-'));
+  const python = process.env.PET_PYTHON
+    || 'C:\\Users\\HP\\.dsh\\dsh-runtimes\\dsh-primary-runtime\\dependencies\\python\\python.exe';
+
+  // No source picture at all: `PET_ART=chibi` must still produce the pet.
+  const built = spawnSync(python, [path.join(ROOT, 'tools', 'build-assets.py')], {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 240_000,
+    env: { ...process.env, PET_ASSET_ROOT: scratch, PET_ART: 'chibi' },
+  });
+  const log = `${built.stdout ?? ''}\n${built.stderr ?? ''}`;
+  assertEqual(built.status, 0, `build failed:\n${log.slice(-800)}`);
+  assertMatch(log, /Q-version/, 'the builder says it drew the Q-version');
+
+  for (const name of ['pet.png', 'pet-64.png', 'pet.ico', 'avatar.png', 'pet-fallback.png']) {
+    assert(fs.existsSync(path.join(scratch, 'assets', name)), `assets/${name} was produced`);
+  }
+
+  const inspect = path.join(scratch, 'inspect.py');
+  fs.writeFileSync(inspect, [
+    'import json, sys',
+    'from PIL import Image',
+    'pet = Image.open(sys.argv[1]).convert("RGBA")',
+    'avatar = Image.open(sys.argv[2]).convert("RGBA")',
+    'w, h = pet.size',
+    'opaque = sum(1 for p in pet.getdata() if p[3] > 200)',
+    'print(json.dumps({',
+    '  "corner": pet.getpixel((2, 2))[3],',
+    '  "opaque": opaque,',
+    '  "total": w * h,',
+    '  "avatar_corner": avatar.getpixel((2, 2))[3],',
+    '  "avatar_centre": avatar.getpixel((avatar.width // 2, avatar.height // 2))[3],',
+    '}))',
+  ].join('\n'), 'utf8');
+  const probed = spawnSync(python, [inspect,
+    path.join(scratch, 'assets', 'pet-512.png'),
+    path.join(scratch, 'assets', 'avatar.png')], { encoding: 'utf8', windowsHide: true, timeout: 60_000 });
+  assertEqual(probed.status, 0, `inspection failed: ${(probed.stderr ?? '').slice(0, 200)}`);
+  const report = JSON.parse(probed.stdout.trim());
+
+  assertEqual(report.corner, 0, 'the art has transparent corners');
+  const coverage = report.opaque / report.total;
+  assert(coverage > 0.15, `the character must actually be drawn, covered ${(coverage * 100).toFixed(1)}%`);
+  assertEqual(report.avatar_corner, 0, 'the avatar is round');
+  assertEqual(report.avatar_centre, 255, 'and its centre is the face, not empty space');
+
+  fs.rmSync(scratch, { recursive: true, force: true });
+}, 300_000);
+
+await check('the Q-version declares where its face is', async () => {
+  // The generic "top of the bounding box" heuristic lands on the sword, so the
+  // generator has to state the face position explicitly.
+  const source = fs.readFileSync(path.join(ROOT, 'tools', 'chibi.py'), 'utf8');
+  assertMatch(source, /^FACE_BOX = \(/m, 'chibi.py exports FACE_BOX');
+  const build = fs.readFileSync(path.join(ROOT, 'tools', 'build-assets.py'), 'utf8');
+  assertMatch(build, /crop_normalised\(master, face_box\)/, 'and the build honours it for the avatar');
+});
 
 // ---------------------------------------------------------------------------
 console.log(results.join('\n'));
