@@ -274,14 +274,31 @@ node bin/pet.mjs doctor
 
 窗口自己的日志在 `%DSH_HOME%\desktop-pet\desktop.log`，状态在同一个目录。
 
+### 「我改了插件，但没生效」
+
+**这是 DSH 的模块缓存，不是 bug。** DSH 按 URL 缓存 ES 模块：停用再启用一个插件条目会重组 Loader 树，但**不会重新 import 那个文件**。所以改完宿主侧源码必须重启 DSH 才会生效。
+
+插件会自己告诉你这件事：
+
+```bash
+curl http://127.0.0.1:19387/pet/api/health
+# {"ok":true,"service":"dsh-desktop-pet","clients":0,
+#  "build":{"loaded":"a1b2c3d4","onDisk":"e5f6a7b8","stale":true}}
+```
+
+`loaded` 是进程启动时算出的模块指纹，`onDisk` 是现在磁盘上的；两者不同就该重启了。网页顶部会显示一条黄色横幅，`pet_status` 工具也会提示。
+
+> 关键区别：网页和悬浮窗用的资源是**每次请求从磁盘读**的，所以前端修复刷新页面就生效；只有宿主侧（事件、动作、额度轮询）才需要重启 DSH。这个区别很容易让人以为「改了没用」。
+
 | 现象 | 原因 / 处理 |
 |---|---|
 | 看不到悬浮窗 | 跑 `doctor`；看 `desktop.log`；`node bin/pet.mjs start` 会告诉你它用了哪个启动策略 |
 | 窗口一闪就没了 | 宿主在作业对象里 —— 插件会自动切到 WMI 启动器，日志里会写 `switching to the WMI launcher` |
+| 右键菜单某项没反应 | 现在每个动作都会回一个气泡确认；若仍无反应，查 `/pet/api/health` 的 `stale` |
+| 改了源码没生效 | 见上。前端刷新即可，宿主侧重启 DSH |
 | 额度显示「未登录」 | DSH 里没登录 DeepSeek 开放平台账号；这是正常状态，不是错误 |
 | 额度一直 `unknown` | 服务冷启动时轮询还没跑；等一次心跳，或 `/pet quota` 强制刷新 |
 | 手机打不开 | 需要 `dsh web --host 0.0.0.0` 启动，并用 `/pet url` 拿带 token 的链接 |
-| 改了源码没生效 | DSH 缓存 ES 模块。重启 DSH 才会加载新的插件代码 |
 
 ---
 

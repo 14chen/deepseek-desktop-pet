@@ -16,6 +16,7 @@ const ROOT = path.resolve(here, '..');
 
 const suites = [
   ['unit', path.join(ROOT, 'test', 'unit', 'core.test.mjs')],
+  ['client (browser half)', path.join(ROOT, 'test', 'unit', 'client.test.mjs')],
   ['host end-to-end', path.join(ROOT, 'test', 'e2e', 'host.e2e.mjs')],
   ['desktop window', path.join(ROOT, 'test', 'e2e', 'desktop.e2e.mjs')],
 ];

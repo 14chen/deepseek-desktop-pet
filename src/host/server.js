@@ -21,6 +21,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
+import { buildStatus } from './build.js';
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(here, '..', '..');
 const WEB_ROOT = path.join(PACKAGE_ROOT, 'web');
@@ -238,9 +240,18 @@ export class PetServer {
     const relative = pathname.slice(PET_PREFIX.length) || '/';
 
     // Health is reachable without the token so a monitor or the desktop window
-    // can prove the host is alive before it has the secret.
-    if (relative === '/health') {
-      writeJson(res, 200, { ok: true, service: 'dsh-desktop-pet', clients: this.clients.size });
+    // can prove the host is alive before it has the secret. It also answers the
+    // question a plugin edit always raises: "do I need to restart DSH?".
+    //
+    // Served under the API prefix because that is where the page looks for it,
+    // with the bare path kept as an alias for probes and documentation.
+    if (relative === '/api/health' || relative === '/health') {
+      writeJson(res, 200, {
+        ok: true,
+        service: 'dsh-desktop-pet',
+        clients: this.clients.size,
+        build: buildStatus(),
+      });
       return;
     }
 

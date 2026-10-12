@@ -10,14 +10,20 @@
  * a phone that opened the LAN link keeps working without a cookie.
  */
 
-const API = 'pet/api';
+/**
+ * Absolute, and deliberately so: the page is served from `/pet/`, so a relative
+ * base would resolve `pet/api/state` against the current directory and produce
+ * `/pet/pet/api/state`. Every request would 404 and the page would sit on
+ * "connecting…" forever with nothing clickable working.
+ */
+const API = '/pet/api';
 const POLL_FALLBACK_MS = 2500;
 
 /** Forward the LAN token from the page URL onto API requests. */
 const TOKEN = new URLSearchParams(location.search).get('token');
 
 function apiUrl(path) {
-  const url = new URL(`${API}/${path}`, location.href);
+  const url = new URL(`${API}/${path}`, location.origin);
   if (TOKEN) url.searchParams.set('token', TOKEN);
   return url.toString();
 }
@@ -26,6 +32,8 @@ const $ = (id) => document.getElementById(id);
 
 const dom = {
   app: $('app'),
+  staleBanner: $('staleBanner'),
+  staleDetail: $('staleDetail'),
   petName: $('petName'),
   petSub: $('petSub'),
   levelPill: $('levelPill'),
@@ -471,6 +479,44 @@ function render(snapshot) {
   }
 }
 
+/**
+ * Warn when the host is running older code than what is on disk.
+ *
+ * DSH caches ES modules by URL, so editing a plugin has no effect until the
+ * process restarts. Saying so plainly is the difference between "the fix did
+ * not work" and "restart to pick it up".
+ *
+ * Two signals are used. Normally the host compares its own load-time
+ * fingerprint against the disk. But a host older than this page cannot report
+ * one at all - and that absence is itself proof, because the page and the host
+ * are served from the same checkout. Without the fallback the warning would
+ * only ever appear one version too late to be useful.
+ */
+async function checkBuild() {
+  try {
+    const response = await fetch(apiUrl('health'), { cache: 'no-store' });
+    if (!response.ok) return;
+    const info = await response.json();
+    const build = info?.build;
+
+    if (!build) {
+      dom.staleDetail.textContent =
+        'DSH 仍运行着更新前的插件代码（它还没有构建标识）。重启 DSH 后生效。';
+      dom.staleBanner.hidden = false;
+      return;
+    }
+    if (build.stale) {
+      dom.staleDetail.textContent =
+        `DSH 仍在运行旧模块（${build.loaded}），磁盘上是 ${build.onDisk}。重启 DSH 后生效。`;
+      dom.staleBanner.hidden = false;
+      return;
+    }
+    dom.staleBanner.hidden = true;
+  } catch {
+    /* the banner is a courtesy; a failed check must not disturb the page */
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Transport
 // ---------------------------------------------------------------------------
@@ -589,6 +635,7 @@ setInterval(() => {
     renderQuota(state.snapshot.quota ?? {});
     renderStats(state.snapshot);
   }
+  void checkBuild();
 }, 30_000);
 
 document.addEventListener('visibilitychange', () => {
@@ -608,6 +655,7 @@ dom.petImg.addEventListener('error', () => {
 });
 
 startStream();
+void checkBuild();
 // Always take one immediate snapshot so the page is never blank while the
 // event stream is still handshaking.
 void fetch(apiUrl('state'), { cache: 'no-store' })

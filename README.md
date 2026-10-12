@@ -276,10 +276,27 @@ The window's own log is at `%DSH_HOME%\desktop-pet\desktop.log`, with the state 
 |---|---|
 | No window | Run `doctor`; read `desktop.log`; `node bin/pet.mjs start` reports which launch strategy it used |
 | The window vanishes immediately | The host runs commands in a job object — the plugin switches to the WMI launcher and logs `switching to the WMI launcher` |
+| A right-click item does nothing | Every action now answers with a confirmation bubble; if one still does not, check `stale` on `/pet/api/health` |
 | Balance says "not signed in" | No DeepSeek platform account in DSH. That is a state, not an error |
 | Balance stays `unknown` | The first poll has not run yet; wait one heartbeat or run `/pet quota` |
 | A phone cannot open the page | Start with `dsh web --host 0.0.0.0` and use the tokenized link from `/pet url` |
-| Source edits have no effect | DSH caches ES modules; restart DSH to load new plugin code |
+| Source edits have no effect | See above: refresh for the front end, restart DSH for the host |
+
+### "I changed the plugin and nothing happened"
+
+**That is DSH's module cache, not a bug.** DSH caches ES modules by URL: disabling and re-enabling an entry recomposes the Loader tree but does **not** re-import the file. Host-side changes therefore need a DSH restart.
+
+The plugin says so itself:
+
+```bash
+curl http://127.0.0.1:19387/pet/api/health
+# {"ok":true,"service":"dsh-desktop-pet","clients":0,
+#  "build":{"loaded":"a1b2c3d4","onDisk":"e5f6a7b8","stale":true}}
+```
+
+`loaded` is the module fingerprint computed at startup, `onDisk` is what is there now; when they differ, restart. The web page shows a banner, and the `pet_status` tool reports it too.
+
+> The distinction matters: the page and the floating window read their assets **from disk on every request**, so a front-end fix applies on refresh. Only the host side (events, actions, quota polling) needs the restart. That difference is exactly what makes "the fix did nothing" the obvious - and wrong - conclusion.
 
 ---
 

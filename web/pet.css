@@ -107,6 +107,30 @@ body {
   gap: 14px;
 }
 
+/* ------------------------------------------------------- stale-code notice */
+
+/*
+ * DSH caches ES modules, so editing a plugin has no effect until the process
+ * restarts. Without this the user reasonably concludes the fix did not work.
+ */
+.stale-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 14%, var(--surface-strong));
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.stale-banner[hidden] { display: none; }
+.stale-banner .stale-icon { font-size: 16px; line-height: 1.25; color: var(--warn); }
+.stale-banner .stale-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.stale-banner strong { color: var(--warn); font-weight: 650; }
+.stale-banner span { color: var(--text-dim); word-break: break-word; }
+
 /* ---------------------------------------------------------------- topbar */
 
 .topbar {

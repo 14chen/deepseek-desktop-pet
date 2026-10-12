@@ -23,10 +23,11 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { DEFAULT_SETTINGS, formatDuration, formatMoney } from '../shared/protocol.js';
+import { buildStatus } from './build.js';
 import { PetHub } from './hub.js';
 import { PetStore, resolvePetHome } from './store.js';
 import { analyzeBurn, readBalance, resolveBaseline } from './account.js';
@@ -84,17 +85,28 @@ function resolveSettings(config, saved) {
   return merged;
 }
 
-/** Open a URL with the platform's default handler. */
+/**
+ * Open a URL with the platform's default handler.
+ *
+ * `start` is a `cmd` builtin, so it needs a shell; the empty title argument
+ * keeps a quoted URL from being consumed as the window title. It is run
+ * synchronously because it returns immediately and its exit status is the only
+ * signal available that the handoff actually happened - without it a broken
+ * file association would fail completely silently.
+ */
 function openExternal(url) {
   try {
     if (process.platform === 'win32') {
-      // `start` is a cmd builtin, so it needs a shell; the empty title argument
-      // keeps a quoted URL from being consumed as the window title.
-      spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
-      return true;
+      const result = spawnSync('cmd', ['/c', 'start', '', url], {
+        stdio: 'ignore',
+        windowsHide: true,
+        timeout: 8000,
+      });
+      return result.status === 0;
     }
     const command = process.platform === 'darwin' ? 'open' : 'xdg-open';
-    spawn(command, [url], { detached: true, stdio: 'ignore' }).unref();
+    const child = spawn(command, [url], { detached: true, stdio: 'ignore' });
+    child.unref();
     return true;
   } catch {
     return false;
@@ -279,7 +291,67 @@ export function apply(ctx, config = {}) {
   /** The one dispatcher every surface calls. */
   async function dispatch(action, peer = {}) {
     const type = String(action?.type ?? '');
+    let result;
     try {
+      result = await runAction(type, action, peer);
+    } catch (error) {
+      warn(`desktop-pet: action "${type}" failed: ${error?.message ?? error}`);
+      result = { ok: false, message: String(error?.message ?? error) };
+    }
+    announce(type, action, result);
+    return result;
+  }
+
+  /**
+   * Actions the user triggered by hand answer with a short bubble.
+   *
+   * Without this, a menu item that genuinely worked looked broken: the window
+   * fires actions into a file and never sees a reply, so "check quota" or
+   * "focus 25 minutes" changed state invisibly. A brief confirmation is what
+   * makes the menu trustworthy.
+   */
+  function announce(type, action, result) {
+    if (result?.silent === true) return;
+    if (hub.state.settings.mute && type !== 'pet') return;
+
+    const message = typeof result?.message === 'string' ? result.message : '';
+    switch (type) {
+      case 'pet':
+        // The persona line is the whole point of stroking the pet.
+        if (message) hub.toast({ kind: 'info', text: message, key: 'pet-react', ttlMs: 3500 });
+        break;
+      case 'pomodoro-start':
+      case 'pomodoro-break':
+      case 'pomodoro-stop':
+      case 'refresh-quota':
+      case 'open-dsh':
+      case 'open-page':
+      case 'open-url':
+      case 'page-url':
+      case 'mute':
+      case 'unmute':
+      case 'settings':
+      case 'hide-desktop':
+        if (message) {
+          hub.toast({
+            kind: result?.ok === false ? 'error' : 'info',
+            text: message,
+            key: `ack-${type}`,
+            ttlMs: result?.ok === false ? 12_000 : 4500,
+          });
+        }
+        break;
+      default:
+        // A failure is always worth surfacing, even for an action with no ack.
+        if (result?.ok === false && message && type !== 'dismiss-all') {
+          hub.toast({ kind: 'error', text: message, key: `err-${type}`, ttlMs: 12_000 });
+        }
+        break;
+    }
+  }
+
+  /** Perform one action. Every branch returns `{ ok, message }`. */
+  async function runAction(type, action, peer = {}) {
       switch (type) {
         // ---------------------------------------------------------- notify
         case 'notify': {
@@ -300,9 +372,13 @@ export function apply(ctx, config = {}) {
         // ----------------------------------------------------------- quota
         case 'refresh-quota': {
           const reading = await pollQuota({ force: true });
+          if (reading?.ok === false) {
+            return { ok: false, message: `额度读取失败：${reading?.error ?? '未知原因'}` };
+          }
+          const quota = state().quota;
           return {
-            ok: reading?.ok !== false,
-            message: reading?.ok ? '额度已刷新' : `额度读取失败：${reading?.error ?? '未知原因'}`,
+            ok: true,
+            message: `额度已刷新：${formatMoney(quota.totalBalance, quota.currency)}`,
           };
         }
 
@@ -314,13 +390,27 @@ export function apply(ctx, config = {}) {
             ? { ok: true, message: type === 'restart' ? '桌宠已重启' : '桌宠已显示' }
             : { ok: false, message: `无法启动桌宠：${result.error}` };
         }
-        case 'hide': {
+        case 'hide':
+        case 'hide-desktop': {
+          // The window has no taskbar entry, so "hidden" still has to be
+          // reachable: the command channel hides it and the tray icon brings it
+          // back. `hide-desktop` is the name the window's own menu sends; it
+          // used to fall through to "unknown action", so the menu item did
+          // nothing at all.
           try {
             fs.writeFileSync(store.commandFile, JSON.stringify({ cmd: 'hide', at: Date.now() }), 'utf8');
-          } catch {
-            return { ok: false, message: '无法通知桌宠窗口' };
+          } catch (error) {
+            return { ok: false, message: `无法通知桌宠窗口：${error?.message ?? error}` };
           }
-          return { ok: true, message: '桌宠已隐藏（可从托盘图标恢复）' };
+          return { ok: true, message: '桌宠已隐藏，可从托盘图标恢复' };
+        }
+        case 'show-window': {
+          try {
+            fs.writeFileSync(store.commandFile, JSON.stringify({ cmd: 'show', at: Date.now() }), 'utf8');
+          } catch (error) {
+            return { ok: false, message: `无法通知桌宠窗口：${error?.message ?? error}` };
+          }
+          return { ok: true, message: '桌宠已显示' };
         }
         case 'quit-desktop': {
           await bridge.stop();
@@ -346,15 +436,19 @@ export function apply(ctx, config = {}) {
           const target = address.url
             ? String(ctx.get('connection')?.authenticatedUrl?.(address.url) ?? address.url)
             : '';
-          if (!target) return { ok: false, message: 'DSH 地址未知，请在浏览器中打开 DSH 后再试' };
-          openExternal(target);
-          return { ok: true, message: '已打开 DSH' };
+          if (!target) {
+            return { ok: false, message: 'DSH 地址未知；请先在浏览器里打开 DSH，再用本菜单' };
+          }
+          return openExternal(target)
+            ? { ok: true, message: '已在浏览器中打开 DSH' }
+            : { ok: false, message: '无法调用浏览器打开 DSH，请手动访问 ' + address.url };
         }
         case 'open-page': {
           const url = currentAddress().lanUrl;
           if (!url) return { ok: false, message: '网页服务尚未就绪，请稍后再试' };
-          openExternal(url);
-          return { ok: true, message: `已打开桌宠页面：${url}` };
+          return openExternal(url)
+            ? { ok: true, message: `已在浏览器中打开：${url}` }
+            : { ok: false, message: `无法自动打开浏览器，请手动访问 ${url}` };
         }
         case 'page-url': {
           // The tokenized URL is what another device needs. It is only ever
@@ -464,10 +558,6 @@ export function apply(ctx, config = {}) {
 
         default:
           return { ok: false, message: `未知操作：${type}` };
-      }
-    } catch (error) {
-      warn(`desktop-pet: action "${type}" failed: ${error?.message ?? error}`);
-      return { ok: false, message: String(error?.message ?? error) };
     }
   }
 
@@ -628,6 +718,10 @@ export function apply(ctx, config = {}) {
         if (s.pomodoro.running) lines.push(`番茄钟剩余 ${formatDuration(s.pomodoro.remainingMs)}`);
         if (s.plan?.todos?.length) {
           lines.push(`当前计划：${s.plan.counts.completed}/${s.plan.todos.length} 完成`);
+        }
+        const build = buildStatus();
+        if (build.stale) {
+          lines.push(`⚠ 磁盘上的插件代码已更新（运行中 ${build.loaded}，磁盘 ${build.onDisk}），重启 DSH 后生效`);
         }
         return lines.join('\n');
       },

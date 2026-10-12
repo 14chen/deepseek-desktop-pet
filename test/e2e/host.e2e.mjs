@@ -187,6 +187,45 @@ await check('GET /pet/health answers without a token', async () => {
   assertEqual(body.service, 'dsh-desktop-pet', 'health service');
 });
 
+await check('every endpoint the web page calls actually exists', async () => {
+  // The page once asked for /pet/api/health while the server only served
+  // /pet/health, so a diagnostic silently did nothing. Deriving the list from
+  // the client source is what makes this class of mismatch impossible to miss.
+  const source = fs.readFileSync(path.join(ROOT, 'web', 'pet.js'), 'utf8');
+  const paths = [...new Set([...source.matchAll(/apiUrl\('([a-z]+)'\)/g)].map((m) => m[1]))];
+  assert(paths.length >= 3, `expected several endpoints, found ${paths.join(', ')}`);
+
+  const missing = [];
+  for (const name of paths) {
+    const response = await fetch(`${host.base}/pet/api/${name}`);
+    // `events` is a stream and `action` needs a POST; both still exist.
+    if (response.status === 404) missing.push(name);
+    response.body?.cancel?.().catch(() => {});
+  }
+  assertEqual(missing, [], `the page calls endpoints the server does not serve: ${missing.join(', ')}`);
+});
+
+await check('the health alias used by probes still answers', async () => {
+  const response = await fetch(`${host.base}/pet/health`);
+  assertEqual(response.status, 200, 'the bare path is kept');
+  const body = await response.json();
+  assertEqual(body.ok, true, 'and returns the same shape');
+  assert(body.build, 'including the build block');
+});
+
+await check('health reports whether the running code is current', async () => {
+  // DSH caches ES modules, so a plugin edit needs a process restart. Saying so
+  // is what stops "the fix did not work" from being the obvious conclusion.
+  const response = await fetch(`${host.base}/pet/api/health`);
+  assertEqual(response.status, 200, 'the API path answers too');
+  const body = await response.json();
+  assert(body.build, 'health carries a build block');
+  assertEqual(typeof body.build.loaded, 'string', 'loaded fingerprint');
+  assertEqual(typeof body.build.onDisk, 'string', 'on-disk fingerprint');
+  assertEqual(body.build.loaded, body.build.onDisk, 'a freshly loaded module matches the disk');
+  assertEqual(body.build.stale, false, 'and is not reported as stale');
+});
+
 await check('GET /pet/ serves the responsive page', async () => {
   const response = await fetch(`${host.base}/pet/`);
   assertEqual(response.status, 200, 'page status');
@@ -770,7 +809,109 @@ await check('a corrupt state file is quarantined rather than fatal', async () =>
   }
 });
 
-// --- 11. Degraded environments --------------------------------------------
+// --- 12. The window's own commands ----------------------------------------
+await check('every action the floating window can send is handled', async () => {
+  // The set is read out of the window script itself, so adding a menu item that
+  // nothing handles cannot pass unnoticed - which is exactly how "hide pet" sat
+  // there doing nothing.
+  const script = fs.readFileSync(path.join(ROOT, 'desktop', 'pet-window.ps1'), 'utf8');
+  const emitted = [...new Set([...script.matchAll(/Send-Action -Type '([a-z][a-z-]*)'/g)].map((m) => m[1]))];
+  assert(emitted.length >= 8, `expected several actions, found ${emitted.join(', ')}`);
+
+  const destructive = new Set(['quit-desktop', 'open-dsh', 'open-page', 'open-url']);
+  const unhandled = [];
+  for (const type of emitted) {
+    const handled = new RegExp(`case '${type}':`).test(
+      fs.readFileSync(path.join(ROOT, 'src', 'host', 'index.js'), 'utf8'),
+    );
+    if (!handled) unhandled.push(type);
+  }
+  assertEqual(unhandled, [], `the window can send actions the host does not handle: ${unhandled.join(', ')}`);
+
+  // And the safe ones are exercised for real, through the same HTTP endpoint a
+  // menu item ultimately reaches.
+  for (const type of emitted) {
+    if (destructive.has(type)) continue;
+    const result = await host.post(type, type === 'moved' ? { x: 1, y: 2 } : {});
+    assert(result.message !== `未知操作：${type}`, `${type} fell through to "unknown action"`);
+  }
+});
+
+await check('hiding the pet actually reaches the window', async () => {
+  const commandFile = path.join(host.stateDir, 'command.json');
+  fs.rmSync(commandFile, { force: true });
+  const result = await host.post('hide-desktop');
+  assertEqual(result.ok, true, 'the action reports success');
+  assert(fs.existsSync(commandFile), 'a command file is written for the window');
+  const command = JSON.parse(fs.readFileSync(commandFile, 'utf8'));
+  assertEqual(command.cmd, 'hide', 'and it asks the window to hide');
+});
+
+await check('a handled action answers with a bubble, so it does not look broken', async () => {
+  await host.post('dismiss-all');
+  const result = await host.post('pomodoro-start', { minutes: 5 });
+  assertEqual(result.ok, true, 'the action succeeded');
+  assert(typeof result.message === 'string' && result.message.length > 0, 'it explains itself');
+  const state = await host.state();
+  assert(state.toast, 'and a confirmation bubble is raised');
+  assertMatch(state.toast.text, /专注|计时/, 'the bubble describes what happened');
+  await host.post('pomodoro-stop');
+});
+
+await check('a failing action surfaces an error bubble', async () => {
+  const other = await createHost();
+  try {
+    other.ctx.get('deepseekAccount').getBalance = () => Promise.resolve({ status: 'failed' });
+    await other.post('refresh-quota');
+    const state = await other.state();
+    assert(state.toast, 'an error bubble is raised');
+    assertEqual(state.toast.kind, 'error', 'and it is styled as an error');
+  } finally {
+    await other.close();
+  }
+});
+
+await check('every label the window asks for is defined', async () => {
+  // A missing label yields an empty menu item, which is worse than a wrong one.
+  const script = fs.readFileSync(path.join(ROOT, 'desktop', 'pet-window.ps1'), 'utf8');
+
+  // `$ui.Keys` and friends are hashtable members, not labels.
+  const MEMBERS = new Set(['Keys', 'Values', 'Count', 'GetEnumerator', 'ContainsKey', 'Clone']);
+  const wanted = [...new Set([...script.matchAll(/\$ui\.([A-Za-z][A-Za-z0-9]*)/g)].map((m) => m[1]))]
+    .filter((key) => !MEMBERS.has(key));
+  assert(wanted.length > 10, `expected many labels, found ${wanted.length}`);
+
+  const module = await load('src/shared/labels.js');
+  const known = new Set(Object.keys(module.WINDOW_LABELS));
+  const missing = wanted.filter((key) => !known.has(key));
+  assertEqual(missing, [], `the window asks for labels that do not exist: ${missing.join(', ')}`);
+
+  // The ASCII defaults inside the script have to cover the same keys: Windows
+  // PowerShell 5.1 must never be the thing that displays a blank menu.
+  const block = /\$ui = @\{([\s\S]*?)\n\}/.exec(script);
+  assert(block, 'the script defines an ASCII default table');
+  const defaults = new Set([...block[1].matchAll(/^\s*([A-Za-z][A-Za-z0-9]*)\s*=/gm)].map((m) => m[1]));
+  const uncovered = wanted.filter((key) => !defaults.has(key));
+  assertEqual(uncovered, [], `these labels have no ASCII fallback in the script: ${uncovered.join(', ')}`);
+});
+
+await check('the window menu offers a way to reach the web page', async () => {
+  const script = fs.readFileSync(path.join(ROOT, 'desktop', 'pet-window.ps1'), 'utf8');
+  assertMatch(script, /menuOpenPage/, 'the context menu has an entry for it');
+  assertMatch(script, /trayOpenPage/, 'and so does the tray menu');
+  assertMatch(script, /Send-Action -Type 'open-page'/, 'which sends the open-page action');
+});
+
+await check('the window tags its actions with their source', async () => {
+  const script = fs.readFileSync(path.join(ROOT, 'desktop', 'pet-window.ps1'), 'utf8');
+  const sends = [...script.matchAll(/Send-Action -Type '[a-z-]+'( -Payload @\{[^}]*\})?/g)].map((m) => m[0]);
+  const fromMenu = sends.filter((line) => line.includes("source = 'menu'")).length;
+  const fromTray = sends.filter((line) => line.includes("source = 'tray'")).length;
+  assert(fromMenu >= 8, `expected the context menu to tag its actions, found ${fromMenu}`);
+  assert(fromTray >= 3, `expected the tray menu to tag its actions, found ${fromTray}`);
+});
+
+// --- 13. Degraded environments --------------------------------------------
 await check('the plugin loads without tools, commands or a webserver', async () => {
   const ctx = new HarnessContext('bare');
   const module = await import(`file://${ROOT.replace(/\\/g, '/')}/src/host/index.js`);

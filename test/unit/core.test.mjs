@@ -24,6 +24,7 @@ const labels = await load('src/shared/labels.js');
 const account = await load('src/host/account.js');
 const storeModule = await load('src/host/store.js');
 const hubModule = await load('src/host/hub.js');
+const buildModule = await load('src/host/build.js');
 
 const results = [];
 let failures = 0;
@@ -601,6 +602,60 @@ await check('a fresh hub starts from defaults', async () => {
   } finally {
     hub.flushSync();
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- build identity -------------------------------------------------------
+await check('the build fingerprint tracks module content', async () => {
+  const root = tempDir('build');
+  try {
+    fs.mkdirSync(path.join(root, 'src', 'host'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'src', 'shared'), { recursive: true });
+    for (const relative of buildModule.HOST_SOURCES) {
+      const file = path.join(root, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, '// placeholder\n', 'utf8');
+    }
+
+    const first = buildModule.fingerprintHost(root);
+    assertEqual(first.length, 8, 'a short hex fingerprint');
+
+    // A rebuild changes size and mtime, which is exactly what is fingerprinted.
+    const target = path.join(root, 'src', 'host', 'index.js');
+    fs.writeFileSync(target, '// placeholder plus a change\n', 'utf8');
+    const second = buildModule.fingerprintHost(root);
+    assert(second !== first, 'editing a module changes the fingerprint');
+
+    const again = buildModule.fingerprintHost(root);
+    assertEqual(again, second, 'and it is stable when nothing changes');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await check('an unreadable source tree is not reported as stale', async () => {
+  const status = buildModule.buildStatus(path.join(os.tmpdir(), 'definitely-not-here'));
+  assertEqual(status.onDisk, 'unknown', 'nothing could be read');
+  assertEqual(status.stale, false, 'no evidence is not evidence of staleness');
+});
+
+await check('a newer tree on disk is reported as stale', async () => {
+  const root = tempDir('build-stale');
+  try {
+    for (const relative of buildModule.HOST_SOURCES) {
+      const file = path.join(root, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, '// a\n', 'utf8');
+    }
+    const before = buildModule.fingerprintHost(root);
+    fs.writeFileSync(path.join(root, 'src', 'host', 'index.js'), '// b, newer\n', 'utf8');
+    const after = buildModule.fingerprintHost(root);
+    assert(before !== after, 'the fingerprint moved');
+    // buildStatus compares the module's own load-time value against this root,
+    // so a different tree necessarily reads as stale.
+    assertEqual(buildModule.buildStatus(root).stale, true, 'a different tree is stale');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

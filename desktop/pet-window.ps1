@@ -119,11 +119,13 @@ $ui = @{
   dragReaction    = 'Nice view from here!'
   trayTooltip     = 'DeepSeek Pet'
   trayShowHide    = 'Show / hide pet'
+  trayOpenPage    = 'Open pet page'
   trayOpenDsh     = 'Open DSH'
   trayRefreshQuota = 'Refresh quota'
   trayQuit        = 'Quit'
   menuGreet       = 'Say hello'
   menuQuota       = 'Check quota'
+  menuOpenPage    = 'Open pet page'
   menuFocus       = 'Focus 25 min'
   menuStopTimer   = 'Stop timer'
   menuQuiet       = 'Quiet for a while'
@@ -605,15 +607,17 @@ $petHost.Add_MouseRightButtonUp({
   $menu.Foreground = [System.Windows.Media.Brushes]::White
   $menu.BorderBrush = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(90, 120, 190, 255))
 
-  [void](Add-MenuItem $menu $ui.menuGreet { Send-Action -Type 'pet'; Invoke-Reaction -Kind 'pop' })
-  [void](Add-MenuItem $menu $ui.menuQuota { Send-Action -Type 'refresh-quota' })
-  [void](Add-MenuItem $menu $ui.menuFocus { Send-Action -Type 'pomodoro-start' -Payload @{ minutes = 25 } })
-  [void](Add-MenuItem $menu $ui.menuStopTimer { Send-Action -Type 'pomodoro-stop' })
-  [void](Add-MenuItem $menu $ui.menuQuiet { Send-Action -Type 'dismiss-all' })
+  [void](Add-MenuItem $menu $ui.menuGreet { Send-Action -Type 'pet' -Payload @{ source = 'menu' }; Invoke-Reaction -Kind 'pop' })
+  [void](Add-MenuItem $menu $ui.menuQuota { Send-Action -Type 'refresh-quota' -Payload @{ source = 'menu' } })
+  [void](Add-MenuItem $menu $ui.menuOpenPage { Send-Action -Type 'open-page' -Payload @{ source = 'menu' } })
+  [void](Add-MenuItem $menu $ui.menuOpenDsh { Send-Action -Type 'open-dsh' -Payload @{ source = 'menu' } })
   [void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
-  [void](Add-MenuItem $menu $ui.menuOpenDsh { Send-Action -Type 'open-dsh' })
-  [void](Add-MenuItem $menu $ui.menuHide { Send-Action -Type 'hide-desktop' })
-  [void](Add-MenuItem $menu $ui.menuQuit { Send-Action -Type 'quit-desktop' })
+  [void](Add-MenuItem $menu $ui.menuFocus { Send-Action -Type 'pomodoro-start' -Payload @{ minutes = 25; source = 'menu' } })
+  [void](Add-MenuItem $menu $ui.menuStopTimer { Send-Action -Type 'pomodoro-stop' -Payload @{ source = 'menu' } })
+  [void](Add-MenuItem $menu $ui.menuQuiet { Send-Action -Type 'dismiss-all' -Payload @{ source = 'menu' } })
+  [void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
+  [void](Add-MenuItem $menu $ui.menuHide { Send-Action -Type 'hide-desktop' -Payload @{ source = 'menu' } })
+  [void](Add-MenuItem $menu $ui.menuQuit { Send-Action -Type 'quit-desktop' -Payload @{ source = 'menu' } })
 
   $menu.IsOpen = $true
   $event.Handled = $true
@@ -654,9 +658,10 @@ $trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
 [void]$trayMenu.Items.Add($ui.trayShowHide, $null, {
   $window.Visibility = if ($window.Visibility -eq 'Visible') { 'Hidden' } else { 'Visible' }
 })
-[void]$trayMenu.Items.Add($ui.trayOpenDsh, $null, { Send-Action -Type 'open-dsh' })
-[void]$trayMenu.Items.Add($ui.trayRefreshQuota, $null, { Send-Action -Type 'refresh-quota' })
-[void]$trayMenu.Items.Add($ui.trayQuit, $null, { Send-Action -Type 'quit-desktop'; $window.Close() })
+[void]$trayMenu.Items.Add($ui.trayOpenPage, $null, { Send-Action -Type 'open-page' -Payload @{ source = 'tray' } })
+[void]$trayMenu.Items.Add($ui.trayOpenDsh, $null, { Send-Action -Type 'open-dsh' -Payload @{ source = 'tray' } })
+[void]$trayMenu.Items.Add($ui.trayRefreshQuota, $null, { Send-Action -Type 'refresh-quota' -Payload @{ source = 'tray' } })
+[void]$trayMenu.Items.Add($ui.trayQuit, $null, { Send-Action -Type 'quit-desktop' -Payload @{ source = 'tray' }; $window.Close() })
 $notifyIcon.ContextMenuStrip = $trayMenu
 $notifyIcon.Add_MouseDoubleClick({
   $window.Visibility = [System.Windows.Visibility]::Visible
