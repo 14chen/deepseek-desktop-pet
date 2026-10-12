@@ -4,16 +4,20 @@ pnpm-lock.yaml
 package-lock.json
 yarn.lock
 
-# Local scratch: screenshots taken by hand, temporary probes
+# Local scratch: by-hand screenshots, crop experiments, temporary probes
 .tmp/
+.seg/
 *.log
 
-# The user's own source artwork is deliberately NOT ignored: dropping a file
-# here and running `npm run build:assets` is the documented workflow. Uncomment
-# to keep your picture out of version control.
+# Python bytecode from the build helpers
+__pycache__/
+*.pyc
+
+# The supplied source artwork is deliberately committed: the generated assets
+# are derived from it, so keeping it makes `npm run build:assets` reproducible
+# from a clone. Delete it and drop in your own to replace the mascot.
 # pet-source.png
 # pet-source.jpg
-# assets/pet-source.png
 
 # Editor and OS noise
 .vscode/

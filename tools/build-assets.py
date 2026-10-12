@@ -42,8 +42,10 @@ OUT_ROOT = os.path.abspath(os.environ.get("PET_ASSET_ROOT") or ROOT)
 ASSETS = os.path.join(OUT_ROOT, "assets")
 WEB_ASSETS = os.path.join(OUT_ROOT, "web", "assets")
 
-# Where the source picture is looked for, in order.
-SOURCE_DIRS = [OUT_ROOT, os.path.join(OUT_ROOT, "assets")]
+# Where the source picture is looked for, in order. The parent of the project is
+# included because "drop it next to the project folder" is the natural thing to
+# do and costs nothing to support.
+SOURCE_DIRS = [OUT_ROOT, os.path.join(OUT_ROOT, "assets"), os.path.dirname(OUT_ROOT)]
 if OUT_ROOT != ROOT:
     SOURCE_DIRS += [ROOT, os.path.join(ROOT, "assets")]
 
@@ -63,11 +65,22 @@ BLUSH = (255, 138, 160)
 # Source discovery
 # ---------------------------------------------------------------------------
 def find_source() -> str | None:
+    """Find the supplied picture, accepting whatever extension it arrived with.
+
+    A file named `pet-source.png.jpg` is a common accident and should just work.
+    """
     for directory in SOURCE_DIRS:
-        for name in ("pet-source.png", "pet-source.jpg", "pet-source.jpeg", "pet-source.webp"):
-            candidate = os.path.join(directory, name)
-            if os.path.isfile(candidate):
-                return candidate
+        if not os.path.isdir(directory):
+            continue
+        names = sorted(os.listdir(directory))
+        # Exact conventional names win, then any `pet-source.*` image.
+        for preferred in ("pet-source.png", "pet-source.jpg", "pet-source.jpeg", "pet-source.webp"):
+            if preferred in names and os.path.isfile(os.path.join(directory, preferred)):
+                return os.path.join(directory, preferred)
+        for name in names:
+            stem, ext = os.path.splitext(name)
+            if stem.startswith("pet-source") and ext.lower() in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
+                return os.path.join(directory, name)
     return None
 
 
@@ -227,6 +240,21 @@ def draw_fallback(size: int = 1024) -> Image.Image:
 # ---------------------------------------------------------------------------
 # Photo preparation
 # ---------------------------------------------------------------------------
+def corners_agree(image: Image.Image, tolerance: int = 26) -> bool:
+    """Do the four corners describe one flat colour? If not, there is no sticker."""
+    rgb = image.convert("RGB")
+    width, height = rgb.size
+    if width < 8 or height < 8:
+        return False
+    pixels = rgb.load()
+    corners = [
+        pixels[0, 0], pixels[width - 1, 0],
+        pixels[0, height - 1], pixels[width - 1, height - 1],
+    ]
+    seed = corners[0]
+    return all(sum(abs(corner[i] - seed[i]) for i in range(3)) <= tolerance * 3 for corner in corners[1:])
+
+
 def strip_uniform_border(image: Image.Image, tolerance: int = 26) -> Image.Image:
     """Turn a near-uniform outer background into real transparency.
 
@@ -234,19 +262,16 @@ def strip_uniform_border(image: Image.Image, tolerance: int = 26) -> Image.Image
     colour (a white shirt, an eye highlight) are preserved; only regions
     reachable from outside are cleared.
     """
+    if not corners_agree(image, tolerance):
+        return image
+
     rgb = image.convert("RGB")
     width, height = rgb.size
     pixels = rgb.load()
     rgba = image.copy()
     alpha = Image.new("L", (width, height), 255)
     alpha_pixels = alpha.load()
-
-    corners = [pixels[0, 0], pixels[width - 1, 0], pixels[0, height - 1], pixels[width - 1, height - 1]]
-    # Only touch the background when the corners agree it is one flat colour.
-    for corner in corners[1:]:
-        if sum(abs(corner[i] - corners[0][i]) for i in range(3)) > tolerance * 3:
-            return image
-    seed = corners[0]
+    seed = pixels[0, 0]
 
     def matches(colour) -> bool:
         return sum(abs(colour[i] - seed[i]) for i in range(3)) <= tolerance * 3
@@ -363,6 +388,205 @@ def circular_avatar(image: Image.Image, size: int = 128) -> Image.Image:
 
 
 # ---------------------------------------------------------------------------
+# Illustration badge
+# ---------------------------------------------------------------------------
+# When the supplied picture is a full illustration rather than a sticker, there
+# is nothing honest to cut out: the subject usually shares colours with its
+# background, and an automatic matte produces ragged hair and half-eaten armour.
+# The badge solves that by framing the character instead of extracting it, and
+# takes its shape language from the artwork's own holographic rings.
+#
+# The palette below is sampled from the supplied illustration: silver-white
+# armour, cyan hologram, and the red core of the blade.
+BADGE_WHITE = (255, 255, 255)
+BADGE_CYAN = (96, 214, 255)
+BADGE_DEEP = (28, 122, 190)
+BADGE_RED = (255, 86, 96)
+BADGE_SIZE = 1024
+
+
+def disc_mask(size: int, inset: int, feather: float) -> Image.Image:
+    """A soft-edged disc, drawn oversized and downsampled for clean curves."""
+    scale = 4
+    big = Image.new("L", (size * scale, size * scale), 0)
+    ImageDraw.Draw(big).ellipse(
+        [inset * scale, inset * scale, (size - inset) * scale - 1, (size - inset) * scale - 1],
+        fill=255,
+    )
+    mask = big.resize((size, size), Image.Resampling.LANCZOS)
+    return mask.filter(ImageFilter.GaussianBlur(feather)) if feather > 0 else mask
+
+
+def radial_ramp(size: int, inner: float, outer: float, power: float = 1.5) -> Image.Image:
+    """A radial brightness ramp, evaluated small and scaled up."""
+    small = 256
+    ramp = Image.new("L", (small, small), 0)
+    pixels = ramp.load()
+    centre = (small - 1) / 2
+    for y in range(small):
+        for x in range(small):
+            dx = (x - centre) / centre
+            dy = (y - centre) / centre
+            distance = min(1.0, (dx * dx + dy * dy) ** 0.5)
+            pixels[x, y] = max(0, min(255, int((inner + (outer - inner) * distance ** power) * 255)))
+    return ramp.resize((size, size), Image.Resampling.BICUBIC)
+
+
+def gradient_ring(size: int, inset: int, width: int, top, bottom) -> Image.Image:
+    """A vertical-gradient annulus."""
+    scale = 2
+    big = size * scale
+    gradient = Image.new("RGBA", (big, big))
+    draw = ImageDraw.Draw(gradient)
+    for y in range(big):
+        t = y / max(1, big - 1)
+        draw.line([(0, y), (big, y)],
+                  fill=tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3)) + (255,))
+    band = Image.new("L", (big, big), 0)
+    edge = inset * scale
+    ImageDraw.Draw(band).ellipse([edge, edge, big - edge - 1, big - edge - 1],
+                                 outline=255, width=width * scale)
+    gradient.putalpha(band)
+    return gradient.resize((size, size), Image.Resampling.LANCZOS)
+
+
+def offset_layer(image: Image.Image, dx: int, dy: int) -> Image.Image:
+    """Offset without wrapping, leaving the vacated area transparent."""
+    shifted = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    shifted.paste(image, (dx, dy))
+    return shifted
+
+
+def auto_crop_box(image: Image.Image, side_ratio: float = 0.36, centre_ratio: float = 0.28) -> tuple[int, int, int]:
+    """Pick a head-and-shoulders crop without hard-coded pixel coordinates.
+
+    A portrait illustration puts the face in the upper third, so the framing is
+    derived from the image's own proportions rather than from numbers that only
+    suit one picture. The ratios were tuned by comparing candidates: at a
+    desktop pet's size the face has to dominate, and a looser crop leaves the
+    character too small to recognise.
+    """
+    width, height = image.size
+    side = int(min(width, height) * side_ratio)
+    cx = int(width * 0.50)
+    cy = int(height * centre_ratio)
+    left = max(0, min(width - side, cx - side // 2))
+    top = max(0, min(height - side, cy - side // 2))
+    return left, top, left + side, top + side
+
+
+def build_badge(image: Image.Image, box: tuple[int, int, int] | None = None) -> Image.Image:
+    """Compose the character into a luminous disc."""
+    crop_box = box or auto_crop_box(image)
+    crop = image.crop(crop_box).resize((BADGE_SIZE, BADGE_SIZE), Image.Resampling.LANCZOS)
+
+    # The original is bright and low-contrast; a small display needs the face to
+    # separate from the armour.
+    crop = ImageEnhance.Contrast(crop).enhance(1.06)
+    crop = ImageEnhance.Color(crop).enhance(1.10)
+    crop = ImageEnhance.Sharpness(crop).enhance(1.12)
+
+    inset = int(BADGE_SIZE * 0.035)
+    disc = disc_mask(BADGE_SIZE, inset, BADGE_SIZE * 0.0035)
+
+    # Darken toward the rim so the face stays the brightest thing in the badge.
+    shade = radial_ramp(BADGE_SIZE, 0.0, 255.0, 1.45).point(lambda value: 255 - value)
+    figure = Image.new("RGBA", (BADGE_SIZE, BADGE_SIZE), (0, 0, 0, 0))
+    figure.paste(Image.composite(crop, ImageEnhance.Brightness(crop).enhance(0.70), shade), (0, 0), disc)
+
+    canvas = Image.new("RGBA", (BADGE_SIZE, BADGE_SIZE), (0, 0, 0, 0))
+
+    glow = Image.new("RGBA", (BADGE_SIZE, BADGE_SIZE), (0, 0, 0, 0))
+    glow.paste(Image.new("RGBA", (BADGE_SIZE, BADGE_SIZE), BADGE_CYAN + (255,)), (0, 0),
+               disc_mask(BADGE_SIZE, inset - int(BADGE_SIZE * 0.012), BADGE_SIZE * 0.018))
+    glow = glow.filter(ImageFilter.GaussianBlur(BADGE_SIZE * 0.022))
+    glow.putalpha(glow.split()[3].point(lambda value: int(value * 0.55)))
+    canvas.alpha_composite(glow)
+
+    canvas.alpha_composite(figure)
+
+    band = max(4, int(BADGE_SIZE * 0.013))
+    canvas.alpha_composite(gradient_ring(BADGE_SIZE, inset - band // 2, band, BADGE_WHITE, BADGE_CYAN))
+
+    hairline = gradient_ring(BADGE_SIZE, inset + int(BADGE_SIZE * 0.016),
+                             max(2, int(BADGE_SIZE * 0.004)), BADGE_WHITE, BADGE_DEEP)
+    hairline.putalpha(hairline.split()[3].point(lambda value: int(value * 0.55)))
+    canvas.alpha_composite(hairline)
+
+    # One warm accent on the ring, echoing the blade. It is the single red note
+    # in an otherwise cool palette, which is what makes the badge read as this
+    # character rather than a generic frame.
+    accent = Image.new("RGBA", (BADGE_SIZE, BADGE_SIZE), (0, 0, 0, 0))
+    accent_draw = ImageDraw.Draw(accent)
+    radius = int(BADGE_SIZE * 0.030)
+    reach = (BADGE_SIZE * 0.5 - inset) * 0.72
+    ax = int(BADGE_SIZE * 0.5 + reach)
+    ay = int(BADGE_SIZE * 0.5 + reach)
+    accent_draw.ellipse([ax - radius, ay - radius, ax + radius, ay + radius], fill=BADGE_RED + (255,))
+    accent_draw.ellipse([ax - radius // 2, ay - radius // 2, ax + radius // 2, ay + radius // 2],
+                        fill=(255, 232, 236, 255))
+    canvas.alpha_composite(accent.filter(ImageFilter.GaussianBlur(BADGE_SIZE * 0.0018)))
+
+    # Contact shadow so the disc reads as a floating object.
+    shadow = Image.new("RGBA", (BADGE_SIZE, BADGE_SIZE), (0, 0, 0, 0))
+    shadow.paste(Image.new("RGBA", (BADGE_SIZE, BADGE_SIZE), (6, 14, 30, 255)), (0, 0),
+                 disc_mask(BADGE_SIZE, inset, BADGE_SIZE * 0.02))
+    shadow = offset_layer(shadow.filter(ImageFilter.GaussianBlur(BADGE_SIZE * 0.03)),
+                          0, int(BADGE_SIZE * 0.022))
+    shadow.putalpha(shadow.split()[3].point(lambda value: int(value * 0.5)))
+
+    out = Image.new("RGBA", (BADGE_SIZE, BADGE_SIZE), (0, 0, 0, 0))
+    out.alpha_composite(shadow)
+    out.alpha_composite(canvas)
+    return out
+
+
+def try_cutout(image: Image.Image) -> Image.Image | None:
+    """Attempt an ML matte of the subject, when the optional tools are present.
+
+    `PET_CUTOUT=0` forces the badge path, which is what keeps a build
+    reproducible on a machine without the model.
+    """
+    mode = (os.environ.get("PET_CUTOUT") or "auto").strip().lower()
+    if mode in ("0", "off", "false", "never"):
+        return None
+
+    site = os.environ.get("PET_SEG_SITE", r"F:\devbox\pet-tools\pysite")
+    if site and os.path.isdir(site) and site not in sys.path:
+        sys.path.insert(0, site)
+    try:
+        from rembg import new_session, remove
+    except ImportError:
+        print("build-assets: no ML segmenter available; using the badge composition")
+        return None
+
+    model = os.environ.get("PET_CUTOUT_MODEL", "isnet-anime")
+    try:
+        print(f"build-assets: running the {model} matte (first use downloads the weights)")
+        session = new_session(model)
+        cut = remove(
+            image,
+            session=session,
+            alpha_matting=True,
+            alpha_matting_foreground_threshold=250,
+            alpha_matting_background_threshold=15,
+            alpha_matting_erode_size=6,
+        )
+    except Exception as error:  # noqa: BLE001 - any failure simply falls back
+        print(f"build-assets: the matte failed ({type(error).__name__}: {error}); using the badge")
+        return None
+
+    alpha = cut.split()[3]
+    coverage = sum(alpha.point(lambda value: 1 if value > 128 else 0).getdata()) / (cut.width * cut.height)
+    print(f"build-assets: matte covers {coverage * 100:.1f}% of the frame")
+    # A matte that keeps almost everything, or almost nothing, did not work.
+    if coverage > 0.75 or coverage < 0.05:
+        print("build-assets: the matte is not plausible; using the badge composition")
+        return None
+    return cut
+
+
+# ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
 def build() -> int:
@@ -370,24 +594,41 @@ def build() -> int:
     os.makedirs(WEB_ASSETS, exist_ok=True)
 
     source = find_source()
+    art = None
     if source:
         print(f"build-assets: source = {source}")
         with Image.open(source) as opened:
-            art = opened.convert("RGBA")
-        # A photo or AI render usually arrives as an opaque rectangle. Detecting
-        # that and cutting the flat outer background is the single biggest
-        # quality win for a floating mascot.
-        alpha_range = art.split()[3].getextrema()
-        if alpha_range[0] == 255:
-            print("build-assets: opaque image detected - attempting background removal")
-            stripped = strip_uniform_border(art)
+            original = opened.convert("RGBA")
+
+        alpha_range = original.split()[3].getextrema()
+        if alpha_range[0] < 255:
+            # Already has transparency: it is a cut-out subject, so keep it and
+            # just tidy the framing.
+            print("build-assets: source already has transparency - using it as a cut-out figure")
+            art = trim_alpha(enhance(original))
+        elif corners_agree(original):
+            # A sticker: the outer flat colour is safe to remove.
+            print("build-assets: flat outer background detected - removing it")
+            stripped = strip_uniform_border(original)
             if stripped.split()[3].getextrema()[0] < 255:
-                art = stripped
-                print("build-assets: flat outer background removed")
+                print("build-assets: background removed")
+                art = trim_alpha(enhance(stripped))
             else:
-                print("build-assets: background is not a single flat colour; keeping the image as-is")
-        art = trim_alpha(art)
-        art = enhance(art)
+                print("build-assets: the outer colour is not uniform enough to remove safely")
+
+        if art is None:
+            # A full illustration. A colour-based matte cannot separate this
+            # kind of artwork, so an ML matte is attempted first and the badge
+            # composition is the guaranteed fallback.
+            print("build-assets: treating the source as a full illustration")
+            cut = try_cutout(original)
+            if cut is not None:
+                art = trim_alpha(enhance(cut))
+                print("build-assets: using the ML cut-out figure")
+            else:
+                print("build-assets: framing the character in a badge (see build_badge)")
+                art = build_badge(original)
+                print(f"build-assets: badge crop = {auto_crop_box(original)}")
     else:
         print("build-assets: no pet-source found - generating fallback mascot art")
         art = draw_fallback(1024)
@@ -440,10 +681,6 @@ def build() -> int:
         print(f"  wrote {shown} ({os.path.getsize(path):,} bytes)")
 
     used = "user image" if source else "generated fallback"
-    with open(os.path.join(ASSETS, "SOURCE.txt"), "w", encoding="utf-8") as handle:
-        handle.write(f"Art source: {used}\n")
-        if source:
-            handle.write(f"From: {source}\n")
     print(f"build-assets: done ({used}) -> {OUT_ROOT}")
     return 0
 

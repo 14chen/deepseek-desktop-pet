@@ -169,24 +169,41 @@ Every default is documented in [`cordis.patch.yml`](cordis.patch.yml).
 
 ## Using your own artwork
 
-The plugin ships with a hand-drawn fallback mascot. To use your own picture:
+Drop the picture into the project root (its parent directory works too) and rebuild:
 
 ```bash
+# pet-source.png, pet-source.jpg and pet-source.png.jpg are all recognised
 copy your-image.png  F:\devbox\deepseek-desktop-pet\pet-source.png
 node tools/build-assets.mjs
 ```
 
-The build script genuinely *optimises* the picture rather than resizing it:
+The builder picks a strategy from **what the picture actually is** rather than applying one recipe to everything:
 
-- **Background removal.** If the image is opaque and its corners agree on a colour, a breadth-first flood from the edges makes that flat colour transparent. Searching from the outside means interior regions of the same colour — a white shirt, an eye highlight — are left alone.
-- **Trimming.** The alpha bounding box is cropped and a small margin returned, so the mascot fills its frame instead of floating in padding.
-- **Colour lift.** Contrast, saturation and sharpness are nudged so it still reads when drawn small on a busy wallpaper.
-- **Shadow and rim light.** A soft contact shadow underneath plus a faint brand-coloured glow are the reason a sticker reads as an object rather than a floating decal.
-- **Every size.** 512/256/128/64 PNGs, a multi-size ICO for the notification area, and a circular avatar.
+| Your picture | What happens |
+|---|---|
+| **Already has alpha** (a prepared sticker) | Used as-is, just trimmed and colour-lifted |
+| **Opaque, with a flat outer border** | The flat colour is flood-filled from the edges. Searching from the outside means interior regions of the same colour — a white shirt, an eye highlight — are left alone |
+| **A full illustration** (subject plus a busy background) | See below |
 
-If the picture has no flat background at all — a photograph, say — the script **refuses to cut it** and leaves the art intact rather than destroying it.
+The illustration case deserves honesty: **colour alone cannot cut it out.** The subject shares its palette with the background, hair strands are sub-pixel, and the only real boundary is the outline. So there are two layers:
 
-This step needs Python with Pillow (`pip install Pillow`). Nothing at runtime does.
+1. **An ML matte when available.** If `rembg` with the `isnet-anime` model is installed — a model trained specifically on anime — it produces a clean subject with alpha matting keeping the hair soft.
+2. **A badge composition otherwise.** The character is framed in a luminous disc: the rim is darkened radially so the face stays the brightest thing, a contact shadow makes it float, and a cyan-to-white ring takes its shape language from the holographic rings already in the artwork. A single red accent echoes the blade. It reads as *this* character rather than a generic frame.
+
+Installing the optional matte (about 180 MB, into a directory outside the project, leaving your DSH runtime untouched):
+
+```bash
+python -m pip install --target F:\devbox\pet-tools\pysite rembg onnxruntime
+set PET_SEG_SITE=F:\devbox\pet-tools\pysite
+set PET_CUTOUT_MODEL=isnet-anime
+node tools/build-assets.mjs
+```
+
+`PET_CUTOUT=0` forces the badge path, which is what keeps a build reproducible on a machine without the model — and what the test suite uses.
+
+The build also needs Python with Pillow (`pip install Pillow`). That is the only place it is used; nothing at runtime depends on it.
+
+Either way, the build produces 512/256/128/64 PNGs, a multi-size ICO for the notification area, a circular avatar, and the contact shadow and rim glow underneath.
 
 ---
 
@@ -276,6 +293,23 @@ On a non-Windows host the plugin still loads and serves the page and the tools; 
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+The code is MIT — see [LICENSE](LICENSE).
 
-The bundled mascot is original artwork drawn in code. If you supply your own picture, make sure you have the right to use it.
+### About the artwork
+
+The mascot currently in this repository is a character badge generated from
+`pet-source.jpg`. **That source image is not original to this project.** It is a
+picture supplied by the user and designated as their pet; the rights belong to
+whoever made it, and it is not covered by the MIT licence.
+
+If you fork or redistribute this project, delete `pet-source.jpg`, drop in a
+picture you have the right to use, and rebuild:
+
+```bash
+del pet-source.jpg
+copy your-image.png pet-source.png
+node tools/build-assets.mjs
+```
+
+With no source at all, the builder draws a fallback mascot entirely in code,
+which is original and freely usable.

@@ -61,6 +61,10 @@ function ps(command, timeout = 60_000) {
 /**
  * Ask Windows for the pet window's real geometry and extended styles, which is
  * the only authoritative answer to "is it transparent and on top?".
+ *
+ * Only visible windows are reported: a window that is still being torn down
+ * from an earlier run would otherwise be found first and make the assertions
+ * meaningless.
  */
 function inspectWindow(title = 'DeepSeek Pet') {
   const script = `
@@ -83,7 +87,7 @@ $rows = New-Object System.Collections.ArrayList
 $cb = [Inspect+Cb]{ param($h,$l)
   $sb = New-Object System.Text.StringBuilder 256
   [void][Inspect]::GetWindowTextW($h,$sb,256)
-  if ($sb.ToString() -eq '${title}') {
+  if ($sb.ToString() -eq '${title}' -and [Inspect]::IsWindowVisible($h)) {
     $ex = [Inspect]::GetWindowLong($h,-20)
     $r = New-Object Inspect+R
     [void][Inspect]::GetWindowRect($h,[ref]$r)
@@ -425,7 +429,8 @@ await check('an opaque picture with a flat background is optimized into transpar
   });
   const log = `${built.stdout ?? ''}\n${built.stderr ?? ''}`;
   assertEqual(built.status, 0, `build failed:\n${log.slice(-600)}`);
-  assertMatch(log, /flat outer background removed/, 'the background removal actually ran');
+  assertMatch(log, /flat outer background detected/, 'the background removal actually ran');
+  assertMatch(log, /background removed/, 'and it succeeded');
 
   const inspect = path.join(scratch, 'inspect.py');
   fs.writeFileSync(inspect, [
@@ -467,11 +472,13 @@ await check('an opaque picture with a flat background is optimized into transpar
   fs.rmSync(scratch, { recursive: true, force: true });
 }, 240_000);
 
-await check('a picture without a flat background is left alone', async () => {
+await check('a full illustration is framed in a badge instead of being cut apart', async () => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-nobg-'));
   const python = process.env.PET_PYTHON
     || 'C:\\Users\\HP\\.dsh\\dsh-runtimes\\dsh-primary-runtime\\dependencies\\python\\python.exe';
 
+  // A picture with no flat background at all: the same failure mode as a real
+  // illustration, where a colour matte would produce ragged edges.
   const maker = path.join(scratch, 'make.py');
   fs.writeFileSync(maker, [
     'import sys',
@@ -490,16 +497,41 @@ await check('a picture without a flat background is left alone', async () => {
   const built = spawnSync(python, [path.join(ROOT, 'tools', 'build-assets.py')], {
     encoding: 'utf8',
     windowsHide: true,
-    timeout: 180_000,
-    env: { ...process.env, PET_ASSET_ROOT: scratch },
+    timeout: 240_000,
+    // Force the deterministic path: the optional ML matte is a large download
+    // and must never be what decides whether the build is reproducible.
+    env: { ...process.env, PET_ASSET_ROOT: scratch, PET_CUTOUT: '0' },
   });
   const log = `${built.stdout ?? ''}\n${built.stderr ?? ''}`;
   assertEqual(built.status, 0, `build failed:\n${log.slice(-600)}`);
-  assertMatch(log, /not a single flat colour/, 'the builder declines rather than destroying the image');
-  assert(fs.existsSync(path.join(scratch, 'assets', 'pet.png')), 'art is still produced');
+  assertMatch(log, /full illustration/, 'the builder recognises the case');
+  assertMatch(log, /framing the character in a badge/, 'and frames rather than mangles it');
+  assert(!/background removed/.test(log), 'no bogus background removal was attempted');
+
+  const inspect = path.join(scratch, 'inspect.py');
+  fs.writeFileSync(inspect, [
+    'import json, sys',
+    'from PIL import Image',
+    'img = Image.open(sys.argv[1]).convert("RGBA")',
+    'w, h = img.size',
+    'corners = [img.getpixel((2, 2))[3], img.getpixel((w - 3, 2))[3],',
+    '           img.getpixel((2, h - 3))[3], img.getpixel((w - 3, h - 3))[3]]',
+    'print(json.dumps({"corners": corners, "centre": img.getpixel((w // 2, h // 2))[3]}))',
+  ].join('\n'), 'utf8');
+  const probed = spawnSync(python, [inspect, path.join(scratch, 'assets', 'pet-512.png')], {
+    encoding: 'utf8', windowsHide: true, timeout: 60_000,
+  });
+  assertEqual(probed.status, 0, `inspection failed: ${(probed.stderr ?? '').slice(0, 200)}`);
+  const report = JSON.parse(probed.stdout.trim());
+  assertEqual(report.corners, [0, 0, 0, 0], 'the badge is round, so its corners are transparent');
+  assertEqual(report.centre, 255, 'and its centre is opaque');
+
+  for (const name of ['pet.png', 'pet.ico', 'avatar.png', 'pet-fallback.png']) {
+    assert(fs.existsSync(path.join(scratch, 'assets', name)), `assets/${name} was produced`);
+  }
 
   fs.rmSync(scratch, { recursive: true, force: true });
-}, 240_000);
+}, 300_000);
 
 // ---------------------------------------------------------------------------
 console.log(results.join('\n'));
