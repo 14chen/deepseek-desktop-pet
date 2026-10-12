@@ -35,6 +35,13 @@ except ImportError:  # pragma: no cover - Pillow is a documented prerequisite
     print("build-assets: Pillow is required (pip install Pillow)", file=sys.stderr)
     raise SystemExit(2)
 
+# numpy is only needed to drop detached fragments from an ML matte. Without it,
+# that step is skipped and everything else still works.
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - optional
+    np = None
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # `PET_ASSET_ROOT` lets the test suite build into a scratch directory instead of
 # overwriting the committed artwork.
@@ -376,15 +383,72 @@ def _reapply(size: tuple[int, int], image: Image.Image) -> Image.Image:
     return layer
 
 
-def circular_avatar(image: Image.Image, size: int = 128) -> Image.Image:
-    """A round, padded crop for the web header."""
-    square_art = square(image).resize((size, size), Image.Resampling.LANCZOS)
+def head_crop(image: Image.Image, band_ratio: float = 0.34) -> Image.Image:
+    """Crop to the head and shoulders of the subject.
+
+    A full-body figure squeezed into a 128 px avatar is unreadable, and a tray
+    icon at 16 px is worse. The head is at the top of the alpha bounding box, so
+    the crop is taken from there and centred on where the subject actually is in
+    that band rather than on the canvas.
+    """
+    alpha = image.split()[3]
+    bbox = alpha.getbbox()
+    if bbox is None:
+        return square(image)
+
+    left, top, right, bottom = bbox
+    height = bottom - top
+    width = right - left
+
+    band_height = max(8, int(height * band_ratio))
+    band = alpha.crop((left, top, right, top + band_height))
+
+    # Alpha-weighted horizontal centre of the band, so a subject that leans or
+    # holds a weapon to one side still frames their face.
+    pixels = band.load()
+    weight = 0
+    moment = 0
+    for y in range(0, band.height, 2):
+        for x in range(0, band.width, 2):
+            value = pixels[x, y]
+            if value < 24:
+                continue
+            weight += value
+            moment += value * x
+    centre_x = int(left + (moment / weight)) if weight > 0 else left + width // 2
+
+    side = band_height
+    crop_left = max(0, min(image.width - side, centre_x - side // 2))
+    crop_top = max(0, min(image.height - side, top))
+    return square(image.crop((crop_left, crop_top, crop_left + side, crop_top + side)))
+
+
+def circular_avatar(image: Image.Image, size: int = 128, focus_head: bool = True) -> Image.Image:
+    """A round avatar for the web header.
+
+    The subject is framed on the head rather than the whole figure: a
+    full-body character inside a 128 px circle is unreadable.
+    """
+    framed = head_crop(image) if focus_head else square(image)
+    square_art = framed.resize((size, size), Image.Resampling.LANCZOS)
     mask = Image.new("L", (size * 4, size * 4), 0)
     ImageDraw.Draw(mask).ellipse([0, 0, size * 4 - 1, size * 4 - 1], fill=255)
     mask = mask.resize((size, size), Image.Resampling.LANCZOS)
     out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     out.paste(square_art, (0, 0), mask)
     return out
+
+
+def tray_icon(image: Image.Image, size: int = 256) -> Image.Image:
+    """A legible notification-area icon.
+
+    A 16 px tray slot shows almost nothing of a full figure, so this is the head
+    on an opaque rounded plate with a little margin.
+    """
+    framed = head_crop(image).resize((size, size), Image.Resampling.LANCZOS)
+    plate = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    plate.alpha_composite(framed)
+    return plate
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +605,72 @@ def build_badge(image: Image.Image, box: tuple[int, int, int] | None = None) -> 
     return out
 
 
+def dilate(mask):
+    """4-connected binary dilation, without pulling in scipy."""
+    out = mask.copy()
+    out[1:, :] |= mask[:-1, :]
+    out[:-1, :] |= mask[1:, :]
+    out[:, 1:] |= mask[:, :-1]
+    out[:, :-1] |= mask[:, 1:]
+    return out
+
+
+def keep_significant_components(image: Image.Image, min_fraction: float = 0.02) -> Image.Image:
+    """Drop opaque islands that are not part of the subject.
+
+    A matte reliably keeps the character but often also keeps disconnected
+    fragments - floating props, background slivers, stray highlights. Labelling
+    runs on a reduced copy (fast enough in pure numpy) and the resulting keep
+    mask is applied at full resolution.
+    """
+    if np is None:
+        return image
+    alpha = image.split()[3]
+    scale = 3
+    small_w = max(1, image.width // scale)
+    small_h = max(1, image.height // scale)
+    small = alpha.resize((small_w, small_h), Image.Resampling.BILINEAR)
+    mask = np.asarray(small) > 110
+
+    remaining = mask.copy()
+    components: list[tuple[int, np.ndarray]] = []
+    # Grow each component from one seed; bounded iterations keep this cheap.
+    while remaining.any():
+        ys, xs = np.nonzero(remaining)
+        seed = np.zeros_like(remaining)
+        seed[ys[0], xs[0]] = True
+        grown = seed & remaining
+        for _ in range(max(small_w, small_h)):
+            step = dilate(grown) & remaining
+            if np.array_equal(step, grown):
+                break
+            grown = step
+        remaining &= ~grown
+        components.append((int(grown.sum()), grown))
+        if len(components) > 400:
+            break
+
+    if not components:
+        return image
+
+    components.sort(key=lambda item: item[0], reverse=True)
+    largest = components[0][0]
+    keep = np.zeros_like(mask)
+    dropped = 0
+    for size, grown in components:
+        if size >= largest * min_fraction:
+            keep |= grown
+        else:
+            dropped += 1
+    if dropped:
+        print(f"build-assets: dropped {dropped} detached fragment(s) from the matte")
+
+    keep_image = Image.fromarray((keep * 255).astype(np.uint8)).resize(image.size, Image.Resampling.BILINEAR)
+    out = image.copy()
+    out.putalpha(ImageChops.multiply(alpha, keep_image))
+    return out
+
+
 def try_cutout(image: Image.Image) -> Image.Image | None:
     """Attempt an ML matte of the subject, when the optional tools are present.
 
@@ -583,6 +713,8 @@ def try_cutout(image: Image.Image) -> Image.Image | None:
     if coverage > 0.75 or coverage < 0.05:
         print("build-assets: the matte is not plausible; using the badge composition")
         return None
+
+    cut = keep_significant_components(cut)
     return cut
 
 
@@ -659,7 +791,7 @@ def build() -> int:
     outputs.append(avatar)
 
     ico = os.path.join(ASSETS, "pet.ico")
-    master.resize((256, 256), Image.Resampling.LANCZOS).save(ico, sizes=[(s, s) for s in ICO_SIZES])
+    tray_icon(master, 256).save(ico, sizes=[(s, s) for s in ICO_SIZES])
     outputs.append(ico)
 
     # The web page and the in-app overlay read from web/assets.

@@ -183,11 +183,11 @@ The builder picks a strategy from **what the picture actually is** rather than a
 |---|---|
 | **Already has alpha** (a prepared sticker) | Used as-is, just trimmed and colour-lifted |
 | **Opaque, with a flat outer border** | The flat colour is flood-filled from the edges. Searching from the outside means interior regions of the same colour — a white shirt, an eye highlight — are left alone |
-| **A full illustration** (subject plus a busy background) | See below |
+| **A full illustration** (subject plus a busy background) | An ML matte first; the badge composition when no model is installed |
 
-The illustration case deserves honesty: **colour alone cannot cut it out.** The subject shares its palette with the background, hair strands are sub-pixel, and the only real boundary is the outline. So there are two layers:
+The illustration case deserves honesty: **colour alone cannot cut it out.** The subject shares its palette with the background, hair strands are sub-pixel, and the only real boundary is the outline. So:
 
-1. **An ML matte when available.** If `rembg` with the `isnet-anime` model is installed — a model trained specifically on anime — it produces a clean subject with alpha matting keeping the hair soft.
+1. **An ML matte**, when `rembg` with the `isnet-anime` model is installed — a model trained specifically on anime. It produces a clean subject with alpha matting keeping the hair soft, then drops anything not connected to the subject (floating props, background slivers) and trims to the alpha bounds.
 2. **A badge composition otherwise.** The character is framed in a luminous disc: the rim is darkened radially so the face stays the brightest thing, a contact shadow makes it float, and a cyan-to-white ring takes its shape language from the holographic rings already in the artwork. A single red accent echoes the blade. It reads as *this* character rather than a generic frame.
 
 Installing the optional matte (about 180 MB, into a directory outside the project, leaving your DSH runtime untouched):
@@ -199,11 +199,13 @@ set PET_CUTOUT_MODEL=isnet-anime
 node tools/build-assets.mjs
 ```
 
+The weights download on first use (about 168 MB) into `~/.u2net/`.
+
 `PET_CUTOUT=0` forces the badge path, which is what keeps a build reproducible on a machine without the model — and what the test suite uses.
 
 The build also needs Python with Pillow (`pip install Pillow`). That is the only place it is used; nothing at runtime depends on it.
 
-Either way, the build produces 512/256/128/64 PNGs, a multi-size ICO for the notification area, a circular avatar, and the contact shadow and rim glow underneath.
+Either way, the build produces 512/256/128/64 PNGs, a multi-size ICO for the notification area, a circular avatar, and the contact shadow and rim glow underneath. **The avatar and the tray icon are cropped to the head automatically** — a full figure shrunk to 128 px, or worse 16 px, is unreadable.
 
 ---
 

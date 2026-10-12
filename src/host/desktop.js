@@ -138,8 +138,10 @@ export class DesktopBridge {
     const size = art ? pngSize(art.file) : null;
 
     // The window is sized from the art's natural aspect ratio so a tall or wide
-    // mascot is never squashed.
-    const baseHeight = 220;
+    // mascot is never squashed. The default height is chosen to give a
+    // full-body character enough presence to read without crowding a corner of
+    // the screen; `desktopScale` multiplies it.
+    const baseHeight = 260;
     const baseWidth = size && size.height > 0
       ? Math.round(baseHeight * (size.width / size.height))
       : 220;

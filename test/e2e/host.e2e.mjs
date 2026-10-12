@@ -14,12 +14,15 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { HarnessContext, assert, assertEqual, assertMatch, waitFor } from '../harness.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
+const load = (relative) => import(pathToFileURL(path.join(ROOT, relative)).href);
+
+const { DONE_LINES, fill } = await load('src/shared/persona.js');
 
 /** The token every test host is configured with, so the LAN gate is testable. */
 const TEST_TOKEN = 'test-token-0123456789abcdef';
@@ -400,7 +403,14 @@ await check('finishing a turn raises the completion bubble and awards xp', async
 
   assertEqual(after.activity.tasksToday, before.activity.tasksToday + 1, 'task count');
   assertEqual(after.toast.kind, 'done', 'completion bubble');
-  assertMatch(after.toast.text, /完成|搞定|收工|落地/, 'completion wording');
+  assertEqual(after.activity.lastCompleted.sessionId, 'session-test', 'the session is recorded');
+  assertEqual(after.activity.lastCompleted.title, 'F:\\devbox', 'the label falls back to the session cwd');
+  assert(after.toast.text.length > 0, 'the bubble says something');
+  // The wording is drawn at random from the persona, so the assertion is that
+  // it came from the completion pool - not that it happens to be one phrasing.
+  const completionPool = new Set(DONE_LINES.map((line) => fill(line, { title: 'F:\\devbox' })));
+  assert(completionPool.has(after.toast.text),
+    `"${after.toast.text}" should come from the completion pool, got: ${[...completionPool].join(' | ')}`);
   assert(after.pet.xp >= before.pet.xp, 'experience awarded');
 });
 
@@ -667,6 +677,9 @@ await check('the SSE stream opens and immediately sends the current state', asyn
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
   }
+  // Release the socket explicitly: an abandoned stream keeps the server from
+  // closing and would hang the suite's teardown.
+  await reader.cancel().catch(() => {});
   controller.abort();
   assertMatch(buffer, /event: state/, 'first frame is the state');
   assertMatch(buffer, /"pet"/, 'frame carries the state document');
@@ -695,6 +708,7 @@ await check('a state change is pushed to connected clients', async () => {
     buffer += decoder.decode(value, { stream: true });
     if (buffer.slice(seen).includes('推送测试')) break;
   }
+  await reader.cancel().catch(() => {});
   controller.abort();
   assertMatch(buffer.slice(seen), /推送测试/, 'the new item was pushed');
 });

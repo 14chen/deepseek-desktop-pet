@@ -245,7 +245,17 @@ export class HarnessContext {
         return webServer.port;
       },
       async close() {
-        await new Promise((resolve) => server.close(resolve));
+        // An SSE response that a test aborted may still be draining, and
+        // `server.close()` waits for every connection to end. Cutting the
+        // sockets first, and bounding the wait, keeps a stuck stream from
+        // hanging the whole suite.
+        try {
+          server.closeAllConnections?.();
+        } catch { /* older runtimes */ }
+        await Promise.race([
+          new Promise((resolve) => server.close(resolve)),
+          new Promise((resolve) => setTimeout(resolve, 3000).unref?.()),
+        ]);
       },
       get server() {
         return server;
