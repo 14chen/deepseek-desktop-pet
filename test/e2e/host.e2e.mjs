@@ -979,8 +979,27 @@ await check('the window menu can grow and shrink the pet', async () => {
   assertMatch(script, /menuGrow/, 'a grow entry');
   assertMatch(script, /menuShrink/, 'a shrink entry');
   assertMatch(script, /menuResetSize/, 'and a reset');
-  assertMatch(script, /Send-Action -Type 'scale-step' -Payload @\{ delta = 0\.15/, 'grow steps up');
-  assertMatch(script, /Send-Action -Type 'scale-step' -Payload @\{ delta = -0\.15/, 'shrink steps down');
+  // The new value is computed in the window from what it is already showing,
+  // so these work against any host version. Sending the newer incremental
+  // action would leave them silently dead on an older host.
+  assertMatch(script, /menuGrow \{[\s\S]{0,320}?\$script:currentScale \+ 0\.15/, 'grow steps up locally');
+  assertMatch(script, /menuShrink \{[\s\S]{0,320}?\$script:currentScale - 0\.15/, 'shrink steps down locally');
+  assert(!/Send-Action -Type 'scale-step'/.test(script),
+    'the menu must not depend on the newer incremental action');
+});
+
+await check('a menu resize lands in the shared state', async () => {
+  // Exactly what the menu item does: read the current scale, add a step, send
+  // the absolute value through the settings action.
+  const window = fs.readFileSync(path.join(ROOT, 'desktop', 'pet-window.ps1'), 'utf8');
+  const step = /desktopScale = \[Math\]::Round\(\$script:currentScale \+ 0\.15, 2\)/.exec(window);
+  assert(step, 'the grow item computes an absolute value');
+
+  await host.post('settings', { settings: { desktopScale: 1.2 } });
+  const grew = await host.post('settings', { settings: { desktopScale: Math.round((1.2 + 0.15) * 100) / 100 } });
+  assertEqual(grew.ok, true, 'the settings action accepts it');
+  assertEqual((await host.state()).settings.desktopScale, 1.35, 'and the value is applied');
+  await host.post('settings', { settings: { desktopScale: 1 } });
 });
 
 // --- 13. Degraded environments --------------------------------------------

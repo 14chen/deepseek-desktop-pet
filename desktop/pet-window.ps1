@@ -741,9 +741,17 @@ $petHost.Add_MouseRightButtonUp({
   [void](Add-MenuItem $menu $ui.menuStopTimer { Send-Action -Type 'pomodoro-stop' -Payload @{ source = 'menu' } })
   [void](Add-MenuItem $menu $ui.menuQuiet { Send-Action -Type 'dismiss-all' -Payload @{ source = 'menu' } })
   [void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
-  # Size, right where the user is already looking.
-  [void](Add-MenuItem $menu $ui.menuGrow { Send-Action -Type 'scale-step' -Payload @{ delta = 0.15; source = 'menu' } })
-  [void](Add-MenuItem $menu $ui.menuShrink { Send-Action -Type 'scale-step' -Payload @{ delta = -0.15; source = 'menu' } })
+  # Size, right where the user is already looking. The new value is computed
+  # here from the scale the window is already showing, so these work against any
+  # host version - the incremental `scale-step` action is newer, and a menu item
+  # that silently does nothing on an older host is exactly the bug this whole
+  # area keeps producing.
+  [void](Add-MenuItem $menu $ui.menuGrow {
+    Send-Action -Type 'settings' -Payload @{ settings = @{ desktopScale = [Math]::Round($script:currentScale + 0.15, 2) }; source = 'menu' }
+  })
+  [void](Add-MenuItem $menu $ui.menuShrink {
+    Send-Action -Type 'settings' -Payload @{ settings = @{ desktopScale = [Math]::Round($script:currentScale - 0.15, 2) }; source = 'menu' }
+  })
   [void](Add-MenuItem $menu $ui.menuResetSize { Send-Action -Type 'settings' -Payload @{ settings = @{ desktopScale = 1 }; source = 'menu' } })
   [void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
   [void](Add-MenuItem $menu $ui.menuHide { Send-Action -Type 'hide-desktop' -Payload @{ source = 'menu' } })
