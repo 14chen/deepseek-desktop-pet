@@ -323,6 +323,45 @@ if (!isSupportedPlatform()) {
     }
   }, 90_000);
 
+  await check('a WMI-launched window that dies is detected and restarted', async () => {
+    killPetWindows();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-verify-'));
+    try {
+      const store = new PetStore({ dir });
+      store.load({});
+      const settings = { ...DEFAULT_SETTINGS, desktopScale: 1 };
+      await store.publishState(createInitialState(settings));
+
+      const changes = [];
+      const bridge = new DesktopBridge({
+        store,
+        getSettings: () => settings,
+        log: () => {},
+        onBridgeChange: (patch) => changes.push(patch),
+      });
+      bridge.strategy = 'wmi';
+      assertEqual(bridge.start().ok, true, 'launch');
+      await waitFor(() => inspectWindow(), { timeoutMs: 20_000, label: 'the window to appear' });
+      const pid = bridge.windowPid;
+      assert(bridge.isAlive(pid), 'the process is alive');
+      assertEqual(bridge.verify(), false, 'a healthy window reports no change');
+
+      // Kill it behind the bridge's back - the exact case a WMI-launched process
+      // cannot report on its own, because it has no child handle.
+      ps(`Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`);
+      await waitFor(() => !bridge.isAlive(pid), { timeoutMs: 10_000, label: 'the process to die' });
+
+      assertEqual(bridge.verify(), true, 'the death is detected');
+      assertEqual(bridge.running, false, 'and the bridge stops claiming it is running');
+      assert(changes.some((patch) => patch.desktopRunning === false), 'the change is published to the state');
+
+      await bridge.stop();
+    } finally {
+      killPetWindows();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   await check('a capture produces a real PNG of the pet area', async () => {
     const file = path.join(os.tmpdir(), `pet-capture-${Date.now()}.png`);
     try {

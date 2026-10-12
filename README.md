@@ -235,11 +235,11 @@ npm run test:host         # the real plugin inside a miniature Cordis host
 npm run test:desktop      # launches a real window and asks Windows about it
 ```
 
-107 assertions, including:
+108 assertions, including:
 
 - **Logic**: boundary values, edge-triggered thresholds, bubble expiry, the level curve, corrupt-file quarantine
 - **Host end to end**: real HTTP requests against every route, path-traversal refusal, the LAN token gate, the SSE first frame and push, all five tool schemas and executions, the `/pet` command, waterfall observers that never veto, plan mirroring, persistence across a restart, and graceful degradation when a service is missing
-- **The window**: PowerShell syntax, ASCII-only enforcement, the WPF probe report, **actually launching a window and asking Windows whether it is layered and topmost**, the interaction queue, a clean shutdown, screenshots, and the artwork optimiser
+- **The window**: PowerShell syntax, ASCII-only enforcement, the WPF probe report, **actually launching a window and asking Windows whether it is layered and topmost**, a window killed behind the bridge's back being detected and restarted, the interaction queue, a clean shutdown, screenshots, and the artwork optimiser
 
 DSH caches ES modules by URL, so editing a plugin's source does not change the running instance. These suites load the **real modules** directly in Node, which is exactly why they can cover changed code.
 
